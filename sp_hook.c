@@ -112,8 +112,11 @@ int sp_hook_init(void)
 	int ret;
 
 	DEBUG_INFO("==Service Prioritization(SP) Hook init==\n");
-
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0))
 	ret = nf_register_hooks(sp_hook_ops, ARRAY_SIZE(sp_hook_ops));
+#else
+	ret = nf_register_net_hooks(&init_net, sp_hook_ops, ARRAY_SIZE(sp_hook_ops));
+#endif
 	if (ret < 0) {
 		DEBUG_ERROR("SP: Can't register sp_hook\n");
 	}
@@ -129,5 +132,9 @@ int sp_hook_init(void)
  */
 void sp_hook_fini(void)
 {
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0))
 	nf_unregister_hooks(sp_hook_ops, ARRAY_SIZE(sp_hook_ops));
+#else
+	nf_unregister_net_hooks(&init_net, sp_hook_ops, ARRAY_SIZE(sp_hook_ops));
+#endif
 }
