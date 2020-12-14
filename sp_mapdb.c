@@ -57,14 +57,18 @@ static inline void sp_mapdb_rules_init(void)
  * sp_mapdb_notify()
  * 	Notifies the registered module about the rule table changes.
  */
-static void sp_mapdb_notify(uint8_t add_remove_modify, uint8_t new_prec, uint8_t old_prec, bool field_update, struct sp_rule *newrule)
+static void sp_mapdb_notify(uint8_t add_remove_modify, struct sp_rule *newrule)
 {
 	sp_mapdb_rule_update_callback_t cb;
 
 	rcu_read_lock();
 	cb = rcu_dereference(sp_callback);
 	if (cb) {
-		cb(add_remove_modify, new_prec, old_prec, field_update, newrule);
+		/*
+		 * Registered cb will perform packet field base connection flush in
+		 * flow database depending on rule flag
+		 */
+		cb(add_remove_modify, newrule->inner.flags, newrule);
 	}
 	rcu_read_unlock();
 }
@@ -165,7 +169,7 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule)
 		 * Since this is inserting a new rule, the old precendence
 		 * and field update do not possess any meaning.
 		 */
-		sp_mapdb_notify(SP_MAPDB_ADD_RULE, newrule_precedence, 0, false, newrule);
+		sp_mapdb_notify(SP_MAPDB_ADD_RULE, newrule);
 
 		return SP_MAPDB_UPDATE_RESULT_SUCCESS_ADD;
 	}
@@ -182,7 +186,7 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule)
 		/*
 		 * If precedence doesn't change then it has to be some fields modified.
 		 */
-		sp_mapdb_notify(SP_MAPDB_MODIFY_RULE, newrule_precedence, newrule_precedence, true, newrule);
+		sp_mapdb_notify(SP_MAPDB_MODIFY_RULE, newrule);
 
 		call_rcu(&cur_rule_node->rcu, sp_rule_destroy_rcu);
 
@@ -200,7 +204,7 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule)
 	old_prec = cur_rule_node->rule.rule_precedence;
 	field_update = memcmp(&cur_rule_node->rule.inner, &newrule->inner, sizeof(struct sp_rule_inner)) ? true : false;
 	DEBUG_INFO("%px:Success rule id=%d\n", newrule, newrule->id);
-	sp_mapdb_notify(SP_MAPDB_MODIFY_RULE, newrule_precedence, old_prec, field_update, newrule);
+	sp_mapdb_notify(SP_MAPDB_MODIFY_RULE, newrule);
 	call_rcu(&cur_rule_node->rcu, sp_rule_destroy_rcu);
 
 	return SP_MAPDB_UPDATE_RESULT_SUCCESS_MODIFY;
@@ -244,7 +248,7 @@ static sp_mapdb_update_result_t sp_mapdb_rule_delete(uint32_t ruleid)
 	 * There is no point on having old_prec
 	 * and field_update in remove rules case.
 	 */
-	sp_mapdb_notify(SP_MAPDB_REMOVE_RULE, tobedeleted->rule.rule_precedence, 0, false, &tobedeleted->rule);
+	sp_mapdb_notify(SP_MAPDB_REMOVE_RULE, &tobedeleted->rule);
 	call_rcu(&tobedeleted->rcu, sp_rule_destroy_rcu);
 
 	return SP_MAPDB_UPDATE_RESULT_SUCCESS_DELETE;

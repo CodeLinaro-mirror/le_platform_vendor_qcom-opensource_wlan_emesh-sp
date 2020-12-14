@@ -113,6 +113,6 @@ struct sp_rule {
 
 sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule*);
 
-int sp_mapdb_rule_update_register_notify(void (*sp_mapdb_rule_update_callback)(uint8_t add_rm_md, uint8_t newprec, uint8_t oldprec, bool field_update, struct sp_rule *r));
+int sp_mapdb_rule_update_register_notify(void (*sp_mapdb_rule_update_callback)(uint8_t add_rm_md, uint32_t valid_flag, struct sp_rule *r));
 void sp_mapdb_rule_update_unregister_notify(void);
 #endif
