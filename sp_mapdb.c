@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -17,6 +17,7 @@
 #include <linux/kernel.h>
 #include <linux/netfilter.h>
 #include <linux/etherdevice.h>
+#include <linux/if_vlan.h>
 
 #include "sp_mapdb.h"
 #include "sp_types.h"
@@ -259,8 +260,15 @@ static sp_mapdb_update_result_t sp_mapdb_rule_delete(uint32_t ruleid)
 static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 {
 	struct ethhdr *eth_header;
+	struct iphdr *iph;
+	struct tcphdr *tcphdr;
+	struct udphdr *udphdr;
+	uint16_t src_port, dst_port;
+	struct vlan_hdr *vhdr;
+	int16_t vlan_id;
+	uint16_t dscp;
 	bool compare_result, sense;
-	uint8_t flags = rule->inner.flags;
+	uint32_t flags = rule->inner.flags;
 
 	if (flags & SP_RULE_FLAG_MATCH_ALWAYS_TRUE) {
 		DEBUG_INFO("Basic match case.\n");
@@ -293,6 +301,7 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 			return false;
 		}
 	}
+
 	if (flags & SP_RULE_FLAG_MATCH_DST_MAC) {
 		DEBUG_INFO("Matching DST..\n");
 		DEBUG_INFO("skb dst = %pM\n", eth_header->h_dest);
@@ -302,6 +311,150 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 		sense = !!(flags & SP_RULE_FLAG_MATCH_DST_MAC_SENSE);
 		if (!(compare_result ^ sense)) {
 			DEBUG_WARN("DST match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_VLAN_ID) {
+		uint16_t ether_type = ntohs(eth_header->h_proto);
+
+
+		if (ether_type == ETH_P_8021Q) {
+			vhdr = (struct vlan_hdr *)(skb->data + ETH_HLEN);
+			vlan_id = ntohs(vhdr->h_vlan_TCI);
+
+			DEBUG_INFO("Matching VLAN ID..\n");
+			DEBUG_INFO("skb vlan = %u\n", vlan_id);
+			DEBUG_INFO("rule vlan = %u\n", rule->inner.vlan_id);
+
+			compare_result = vlan_id == rule->inner.vlan_id;
+			sense = !!(flags & SP_RULE_FLAG_MATCH_VLAN_ID_SENSE);
+			if (!(compare_result ^ sense)) {
+				DEBUG_WARN("SKB vlan match failed!\n");
+				return false;
+			}
+		} else {
+			return false;
+		}
+	}
+
+	if (flags & (SP_RULE_FLAG_MATCH_SRC_IPV4 || SP_RULE_FLAG_MATCH_DST_IPV4 ||
+				SP_RULE_FLAG_MATCH_SRC_PORT|| SP_RULE_FLAG_MATCH_DST_PORT ||
+				SP_RULE_FLAG_MATCH_DSCP || SP_RULE_FLAG_MATCH_PROTOCOL)) {
+		if (skb->protocol == ETH_P_IP) {
+			/* Check for ip header */
+			if (unlikely(!pskb_may_pull(skb, sizeof(*iph)))) {
+				DEBUG_INFO("No ip header in skb\n");
+				return false;
+			}
+			iph = ip_hdr(skb);
+		} else {
+			DEBUG_INFO("Not ip packet\n");
+			return false;
+		}
+	} else {
+		return true;
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_DSCP) {
+
+		dscp = ip_hdr(skb)->tos & 0xfc;
+
+		DEBUG_INFO("Matching DSCP..\n");
+		DEBUG_INFO("skb DSCP = %u\n", dscp);
+		DEBUG_INFO("rule DSCP = %u\n", rule->inner.dscp);
+
+		compare_result = dscp == rule->inner.dscp;
+		sense = !!(flags & SP_RULE_FLAG_MATCH_DSCP_SENSE);
+		if (!(compare_result ^ sense)) {
+			DEBUG_WARN("SRC dscp match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SRC_IPV4) {
+		DEBUG_INFO("Matching SRC IP..\n");
+		DEBUG_INFO("skb src ipv4 =  %pI4", &iph->saddr);
+		DEBUG_INFO("rule src ipv4 =  %pI4", &rule->inner.src_ipv4_addr);
+
+		compare_result = iph->saddr == rule->inner.src_ipv4_addr;
+		sense = !!(flags & SP_RULE_FLAG_MATCH_SRC_IPV4_SENSE);
+		if (!(compare_result ^ sense)) {
+			DEBUG_WARN("SRC ip match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_DST_IPV4) {
+		DEBUG_INFO("Matching DST IP..\n");
+		DEBUG_INFO("skb dst ipv4 = %pI4", &iph->daddr);
+		DEBUG_INFO("rule dst ipv4 = %pI4", &rule->inner.dst_ipv4_addr);
+
+		compare_result = iph->daddr == rule->inner.dst_ipv4_addr;
+		sense = !!(flags & SP_RULE_FLAG_MATCH_DST_IPV4_SENSE);
+		if (!(compare_result ^ sense)) {
+			DEBUG_WARN("DEST ip match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_PROTOCOL) {
+		DEBUG_INFO("Matching IP Protocol..\n");
+		DEBUG_INFO("skb ip protocol = %u\n", iph->protocol);
+		DEBUG_INFO("rule ip protocol = %u\n", rule->inner.protocol_number);
+
+		compare_result = iph->protocol == rule->inner.protocol_number;
+		sense = !!(flags & SP_RULE_FLAG_MATCH_PROTOCOL_SENSE);
+		if (!(compare_result ^ sense)) {
+			DEBUG_WARN("DEST ip match failed!\n");
+			return false;
+		}
+	}
+
+	if (iph->protocol == IPPROTO_TCP) {
+		/* Check for tcp header */
+		if (unlikely(!pskb_may_pull(skb, sizeof(*tcphdr)))) {
+			DEBUG_INFO("No tcp header in skb\n");
+			return false;
+		}
+
+		tcphdr = tcp_hdr(skb);
+		src_port = tcphdr->source;
+		dst_port = tcphdr->dest;
+	} else if (iph->protocol == IPPROTO_UDP) {
+		/* Check for udp header */
+		if (unlikely(!pskb_may_pull(skb, sizeof(*udphdr)))) {
+			DEBUG_INFO("No udp header in skb\n");
+			return false;
+		}
+
+		udphdr = udp_hdr(skb);
+		src_port = udphdr->source;
+		dst_port = udphdr->dest;
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SRC_PORT) {
+		DEBUG_INFO("Matching SRC PORT..\n");
+		DEBUG_INFO("skb src port = 0x%x\n", ntohs(src_port));
+		DEBUG_INFO("rule srcport = 0x%x\n", rule->inner.src_port);
+
+		compare_result = ntohs(src_port) == rule->inner.src_port;
+		sense = !!(flags & SP_RULE_FLAG_MATCH_SRC_PORT_SENSE);
+		if (!(compare_result ^ sense)) {
+			DEBUG_WARN("SRC port match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_DST_PORT) {
+		DEBUG_INFO("Matching DST PORT..\n");
+		DEBUG_INFO("skb dst port = 0x%x\n", ntohs(dst_port));
+		DEBUG_INFO("rule dst port = 0x%x\n", rule->inner.dst_port);
+
+		compare_result = ntohs(dst_port) == rule->inner.dst_port;
+		sense = !!(flags & SP_RULE_FLAG_MATCH_DST_PORT_SENSE);
+		if (!(compare_result ^ sense)) {
+			DEBUG_WARN("DST port match failed!\n");
 			return false;
 		}
 	}

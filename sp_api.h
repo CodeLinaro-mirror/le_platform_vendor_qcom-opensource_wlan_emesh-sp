@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -30,6 +30,24 @@
 #define	SP_RULE_FLAG_MATCH_SOURCE_MAC_SENSE	0x10		/* Match source mac address mask */
 #define	SP_RULE_FLAG_MATCH_DST_MAC		0x20		/* Match destination mac address mask */
 #define	SP_RULE_FLAG_MATCH_DST_MAC_SENSE	0x40		/* Destination mac address match sense mask */
+#define	SP_RULE_FLAG_MATCH_SRC_IPV4		0x80		/* Match source ipv4 address match mask */
+#define	SP_RULE_FLAG_MATCH_SRC_IPV4_SENSE	0x100		/* Source ipv4 address sense mask */
+#define	SP_RULE_FLAG_MATCH_SRC_IPV6		0x200		/* Match source ipv6 address match mask */
+#define	SP_RULE_FLAG_MATCH_SRC_IPV6_SENSE	0x400		/* Source ipv6 address sense mask */
+#define	SP_RULE_FLAG_MATCH_DST_IPV4		0x800		/* Match destination ipv4 address match mask */
+#define	SP_RULE_FLAG_MATCH_DST_IPV4_SENSE	0x1000		/* Destination ipv4 address sense mask */
+#define	SP_RULE_FLAG_MATCH_DST_IPV6		0x2000		/* Match destination ipv6 address match mask */
+#define	SP_RULE_FLAG_MATCH_DST_IPV6_SENSE	0x4000		/* Destination ipv6 address sense mask */
+#define	SP_RULE_FLAG_MATCH_SRC_PORT		0x8000		/* Match source port match mask */
+#define	SP_RULE_FLAG_MATCH_SRC_PORT_SENSE	0x10000		/* Source port sense mask */
+#define	SP_RULE_FLAG_MATCH_DST_PORT		0x20000		/* Match destination port match mask */
+#define	SP_RULE_FLAG_MATCH_DST_PORT_SENSE	0x40000		/* Destination port sense mask */
+#define	SP_RULE_FLAG_MATCH_PROTOCOL		0x80000		/* Match protocol match mask */
+#define	SP_RULE_FLAG_MATCH_PROTOCOL_SENSE	0x100000	/* Protocol sense mask */
+#define	SP_RULE_FLAG_MATCH_VLAN_ID		0x200000	/* Match VLAN id match mask */
+#define	SP_RULE_FLAG_MATCH_VLAN_ID_SENSE	0x400000	/* VLAN id sense mask */
+#define	SP_RULE_FLAG_MATCH_DSCP			0x800000	/* Match dscp match mask */
+#define	SP_RULE_FLAG_MATCH_DSCP_SENSE		0x1000000	/* DSCP sense mask */
 
 /*
  * sp_mapdb_update_results
@@ -80,8 +98,8 @@ struct sp_rule_inner {
 	 * The value of rule_output determines how to set the pcp value
 	 * to be marked in the matched packet.
 	 */
-	uint8_t rule_output;
-	uint8_t flags;				/* Flag bits for rule match */
+	uint16_t rule_output;
+	uint32_t flags;				/* Flag bits for rule match */
 	uint8_t user_priority;			/* UP in 802.11 qos control */
 
 	/*
@@ -98,6 +116,57 @@ struct sp_rule_inner {
 	 * otherwise this field shall be omitted.
 	*/
 	uint8_t da[ETH_ALEN];
+
+	/*
+	 * Source ipv4 address
+	 */
+	uint32_t src_ipv4_addr;
+	/*
+	 * Source ipv6 address
+	 */
+	uint32_t src_ipv6_addr[4];
+	/*
+	 * Destination ipv4 address
+	 */
+	uint32_t dst_ipv4_addr;
+	/*
+	 * Destination ipv6 address
+	 */
+	uint32_t dst_ipv6_addr[4];
+	/*
+	 * Source port number
+	 */
+	uint16_t src_port;
+	/*
+	 * Destination port number
+	 */
+	uint16_t dst_port;
+	/*
+	 * VLAN id
+	 */
+	uint16_t vlan_id;
+	/*
+	 * Protocol number
+	 */
+	uint8_t protocol_number;
+	/*
+	 * DSCP value
+	 */
+	uint8_t dscp;
+	/*
+	 * Service interval
+	 * Specified msec
+	 * This is min latency expectation and is used
+	 * by Wi-Fi FW for peer tid queue scheduling
+	 */
+	uint8_t service_interval;
+	/*
+	 * Burst size
+	 * Specified in bytes
+	 * This is used by Wi-Fi FW for peer tid queue
+	 * scheduling
+	 */
+	uint32_t burst_size;
 };
 
 /*
