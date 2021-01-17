@@ -693,6 +693,43 @@ void sp_mapdb_ruletable_print(void)
 }
 
 /*
+ * sp_mapdb_get_wlan_latency_params()
+ *  Get latency parameters associated with a sp rule.
+ */
+void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb, uint8_t *service_interval, uint32_t *burst_size)
+{
+	struct sp_mapdb_rule_node *curnode;
+	int i;
+
+	/*
+	 * Look up for matching rule and find WiFi latency parameters
+	 */
+	rcu_read_lock();
+
+	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
+		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
+			DEBUG_INFO("Matching with rid = %d\n", curnode->rule.id);
+			if (sp_mapdb_rule_match(skb, &curnode->rule)) {
+				*service_interval = curnode->rule.inner.service_interval;
+				*burst_size = curnode->rule.inner.burst_size;
+				rcu_read_unlock();
+				return;
+			}
+		}
+	}
+
+	/*
+	 * No match found, set both latency parameters to zero
+	 * which is invalid value
+	 */
+	*service_interval = 0;
+	*burst_size = 0;
+
+	rcu_read_unlock();
+}
+EXPORT_SYMBOL(sp_mapdb_get_wlan_latency_params);
+
+/*
  * sp_mapdb_apply()
  * 	Assign the desired PCP value into skb->priority.
  */
