@@ -51,9 +51,7 @@ struct sp_mapdb_rule_node {
 };
 
 typedef void (*sp_mapdb_rule_update_callback_t)(uint8_t add_remove_modify,
-						uint8_t newprec,
-						uint8_t oldprec,
-						bool field_update,
+						uint32_t valid_flag,
 						struct sp_rule *r);
 
 /*
