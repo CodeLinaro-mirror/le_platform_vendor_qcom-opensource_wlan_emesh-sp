@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -26,6 +26,8 @@
 
 #define SP_HOOK_IEEE19051_CMDU 0x893A
 
+extern int sp_sysctl_data;
+
 /*
  * sp_hook_pre_routing()
  * 	Hook function on the PREROUTING hook point.
@@ -38,14 +40,17 @@ unsigned int sp_hook_pre_routing(void *priv, struct sk_buff *skb, const struct n
 {
 	struct ethhdr *precheck;
 
-	precheck = eth_hdr(skb);
-	if ((precheck->h_proto == SP_HOOK_IEEE19051_CMDU) || skb->vlan_proto) {
-		return NF_ACCEPT;
+	if (sp_sysctl_data & SP_MAPDB_ENABLE_PRE_ROUTING_HOOK) {
+
+		precheck = eth_hdr(skb);
+		if ((precheck->h_proto == SP_HOOK_IEEE19051_CMDU) || skb->vlan_proto) {
+			return NF_ACCEPT;
+		}
+
+		DEBUG_TRACE("%px: Prerouting bridge\n%pM\nto: %pM\n", skb, precheck->h_source, precheck->h_dest);
+
+		sp_mapdb_apply(skb, precheck->h_source, precheck->h_dest);
 	}
-
-	DEBUG_TRACE("%px: Prerouting bridge\n%pM\nto: %pM\n", skb, precheck->h_source, precheck->h_dest);
-
-	sp_mapdb_apply(skb);
 
 	return NF_ACCEPT;
 }
@@ -62,19 +67,22 @@ unsigned int sp_hook_post_routing(void *priv, struct sk_buff *skb, const struct 
 {
 	struct ethhdr *precheck;
 
-	precheck = eth_hdr(skb);
-	if (precheck->h_proto == SP_HOOK_IEEE19051_CMDU || skb->vlan_proto) {
-		return NF_ACCEPT;
-	}
+	if (sp_sysctl_data & SP_MAPDB_ENABLE_POST_ROUTING_HOOK) {
 
-	DEBUG_TRACE("%px: Postrouting bridge\n%pM\nto: %pM\n", skb, precheck->h_source, precheck->h_dest);
+		precheck = eth_hdr(skb);
+		if (precheck->h_proto == SP_HOOK_IEEE19051_CMDU || skb->vlan_proto) {
+			return NF_ACCEPT;
+		}
 
-	/*
-	 * We will apply the SP rules if the incoming interface
-	 * of this packet is different and the outgoing interface.
-	 */
-	if (skb->skb_iif != skb->dev->ifindex) {
-		sp_mapdb_apply(skb);
+		DEBUG_TRACE("%px: Postrouting bridge\n%pM\nto: %pM\n", skb, precheck->h_source, precheck->h_dest);
+
+		/*
+		 * We will apply the SP rules if the incoming interface
+		 * of this packet is different and the outgoing interface.
+		 */
+		if (skb->skb_iif != skb->dev->ifindex) {
+			sp_mapdb_apply(skb, precheck->h_source, precheck->h_dest);
+		}
 	}
 
 	return NF_ACCEPT;

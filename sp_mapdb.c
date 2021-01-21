@@ -261,7 +261,7 @@ static sp_mapdb_update_result_t sp_mapdb_rule_delete(uint32_t ruleid)
  *
  * It is called per packet basis and fields are checked and compared with the SP rule (rule).
  */
-static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
+static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule, uint8_t *smac, uint8_t *dmac)
 {
 	struct ethhdr *eth_header;
 	struct iphdr *iph;
@@ -279,7 +279,6 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 		return true;
 	}
 
-	eth_header = eth_hdr(skb);
 
 	if (flags & SP_RULE_FLAG_MATCH_UP) {
 		DEBUG_INFO("Matching UP..\n");
@@ -295,10 +294,10 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 
 	if (flags & SP_RULE_FLAG_MATCH_SOURCE_MAC) {
 		DEBUG_INFO("Matching SRC..\n");
-		DEBUG_INFO("skb src = %pM\n", eth_header->h_source);
+		DEBUG_INFO("skb src = %pM\n", smac);
 		DEBUG_INFO("rule src = %pM\n", rule->inner.sa);
 
-		compare_result = ether_addr_equal(eth_header->h_source, rule->inner.sa);
+		compare_result = ether_addr_equal(smac, rule->inner.sa);
 		sense = !!(flags & SP_RULE_FLAG_MATCH_SOURCE_MAC_SENSE);
 		if (!(compare_result ^ sense)) {
 			DEBUG_WARN("SRC match failed!\n");
@@ -308,10 +307,10 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 
 	if (flags & SP_RULE_FLAG_MATCH_DST_MAC) {
 		DEBUG_INFO("Matching DST..\n");
-		DEBUG_INFO("skb dst = %pM\n", eth_header->h_dest);
+		DEBUG_INFO("skb dst = %pM\n", dmac);
 		DEBUG_INFO("rule dst = %pM\n", rule->inner.da);
 
-		compare_result = ether_addr_equal(eth_header->h_dest, rule->inner.da);
+		compare_result = ether_addr_equal(dmac, rule->inner.da);
 		sense = !!(flags & SP_RULE_FLAG_MATCH_DST_MAC_SENSE);
 		if (!(compare_result ^ sense)) {
 			DEBUG_WARN("DST match failed!\n");
@@ -477,7 +476,7 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
  * will be used to determine which fields(UP,DSCP) will be used for
  * PCP value.
  */
-static uint8_t sp_mapdb_ruletable_search(struct sk_buff *skb)
+static uint8_t sp_mapdb_ruletable_search(struct sk_buff *skb, uint8_t *smac, uint8_t *dmac)
 {
 	uint8_t output = SP_MAPDB_NO_MATCH;
 	struct sp_mapdb_rule_node *curnode;
@@ -491,7 +490,7 @@ static uint8_t sp_mapdb_ruletable_search(struct sk_buff *skb)
 	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
 		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
 			DEBUG_INFO("Matching with rid = %d\n", curnode->rule.id);
-			if (sp_mapdb_rule_match(skb, &curnode->rule)) {
+			if (sp_mapdb_rule_match(skb, &curnode->rule, smac, dmac)) {
 				output = curnode->rule.inner.rule_output;
 				goto set_output;
 			}
@@ -696,7 +695,8 @@ void sp_mapdb_ruletable_print(void)
  * sp_mapdb_get_wlan_latency_params()
  *  Get latency parameters associated with a sp rule.
  */
-void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb, uint8_t *service_interval, uint32_t *burst_size)
+void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb,
+		uint8_t *service_interval, uint32_t *burst_size, uint8_t *smac, uint8_t *dmac)
 {
 	struct sp_mapdb_rule_node *curnode;
 	int i;
@@ -709,7 +709,7 @@ void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb, uint8_t *service_inte
 	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
 		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
 			DEBUG_INFO("Matching with rid = %d\n", curnode->rule.id);
-			if (sp_mapdb_rule_match(skb, &curnode->rule)) {
+			if (sp_mapdb_rule_match(skb, &curnode->rule, smac, dmac)) {
 				*service_interval = curnode->rule.inner.service_interval;
 				*burst_size = curnode->rule.inner.burst_size;
 				rcu_read_unlock();
@@ -733,12 +733,13 @@ EXPORT_SYMBOL(sp_mapdb_get_wlan_latency_params);
  * sp_mapdb_apply()
  * 	Assign the desired PCP value into skb->priority.
  */
-void sp_mapdb_apply(struct sk_buff *skb)
+void sp_mapdb_apply(struct sk_buff *skb, uint8_t *smac, uint8_t *dmac)
 {
 	rcu_read_lock();
-	skb->priority = sp_mapdb_ruletable_search(skb);
+	skb->priority = sp_mapdb_ruletable_search(skb, smac, dmac);
 	rcu_read_unlock();
 }
+EXPORT_SYMBOL(sp_mapdb_apply);
 
 /*
  * sp_mapdb_init()
