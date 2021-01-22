@@ -342,10 +342,10 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 		}
 	}
 
-	if (flags & (SP_RULE_FLAG_MATCH_SRC_IPV4 || SP_RULE_FLAG_MATCH_DST_IPV4 ||
-				SP_RULE_FLAG_MATCH_SRC_PORT|| SP_RULE_FLAG_MATCH_DST_PORT ||
-				SP_RULE_FLAG_MATCH_DSCP || SP_RULE_FLAG_MATCH_PROTOCOL)) {
-		if (skb->protocol == ETH_P_IP) {
+	if (flags & (SP_RULE_FLAG_MATCH_SRC_IPV4 | SP_RULE_FLAG_MATCH_DST_IPV4 |
+				SP_RULE_FLAG_MATCH_SRC_PORT | SP_RULE_FLAG_MATCH_DST_PORT |
+				SP_RULE_FLAG_MATCH_DSCP | SP_RULE_FLAG_MATCH_PROTOCOL)) {
+		if (skb->protocol == ntohs(ETH_P_IP)) {
 			/* Check for ip header */
 			if (unlikely(!pskb_may_pull(skb, sizeof(*iph)))) {
 				DEBUG_INFO("No ip header in skb\n");
@@ -353,7 +353,7 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule)
 			}
 			iph = ip_hdr(skb);
 		} else {
-			DEBUG_INFO("Not ip packet\n");
+			DEBUG_INFO("Not ip packet protocol: %x \n", skb->protocol);
 			return false;
 		}
 	} else {
