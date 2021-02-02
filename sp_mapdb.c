@@ -142,6 +142,11 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule)
 
 	memcpy(&new_rule_node->rule, newrule, sizeof(struct sp_rule));
 
+	if (newrule_precedence == SP_MAPDB_RULE_MAX_PRECEDENCENUM) {
+		new_rule_node->rule.rule_precedence = 0;
+		newrule_precedence = new_rule_node->rule.rule_precedence;
+	}
+
 	spin_lock(&sp_mapdb_lock);
 	cur_hashentry = sp_mapdb_search_hashentry(newrule->id);
 	if (!cur_hashentry) {
