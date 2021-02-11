@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -22,12 +22,14 @@
 #include "sp_types.h"
 
 static int sp_state;
-static int sp_sysctl_data;
+
+/* SPM pre routing hook enabled as default */
+int sp_sysctl_data = 1;
 
 /*
  * sp_enable_handler()
  * 	Handler callback function for enabling/disabling SPM on runtime.
-*/
+ */
 static int sp_enable_handler(struct ctl_table *ctl, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret;
@@ -40,7 +42,7 @@ static int sp_enable_handler(struct ctl_table *ctl, int write, void __user *buff
 		return ret;
 	}
 
-	if (data == sp_state) {
+	if (data >= sp_state) {
 		DEBUG_WARN("Invalid action(already in this state).\n");
 		return 0;
 	}

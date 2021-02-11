@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -28,6 +28,9 @@
 #define SP_MAPDB_RULE_MAX_PRECEDENCENUM		0xFF
 
 #define SP_MAPDB_RULE_DEFAULT_PCP 		0
+
+#define SP_MAPDB_ENABLE_PRE_ROUTING_HOOK		0x1
+#define SP_MAPDB_ENABLE_POST_ROUTING_HOOK		0x2
 
 /*
  * sp_mapdb_rule_output_types
@@ -90,7 +93,7 @@ void sp_mapdb_ruletable_print(void);
 void sp_mapdb_ruletable_flush(void);
 
 void sp_mapdb_init(void);
-void sp_mapdb_apply(struct sk_buff *);
+void sp_mapdb_apply(struct sk_buff *skb, uint8_t *smac, uint8_t *dmac);
 void sp_mapdb_fini(void);
 
 int sp_hook_init(void);
