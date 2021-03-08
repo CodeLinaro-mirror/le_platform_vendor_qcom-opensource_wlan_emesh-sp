@@ -185,4 +185,5 @@ sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule*);
 void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb, uint8_t *service_interval, uint32_t *burst_size);
 int sp_mapdb_rule_update_register_notify(void (*sp_mapdb_rule_update_callback)(uint8_t add_rm_md, uint32_t valid_flag, struct sp_rule *r));
 void sp_mapdb_rule_update_unregister_notify(void);
+void sp_mapdb_ruletable_flush(void);
 #endif
