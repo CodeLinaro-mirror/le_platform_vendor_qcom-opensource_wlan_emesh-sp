@@ -487,6 +487,19 @@ static uint8_t sp_mapdb_ruletable_search(struct sk_buff *skb, uint8_t *smac, uin
 	struct sp_mapdb_rule_node *curnode;
 	int i, protocol;
 
+	rcu_read_lock();
+	if (rule_manager.rule_count == 0) {
+		rcu_read_unlock();
+		DEBUG_WARN("rule table is empty\n");
+		/*
+		 * When rule table is empty, default DSCP based
+		 * prioritization should be followed
+		 */
+		output = SP_MAPDB_USE_DSCP;
+		goto set_output;
+	}
+	rcu_read_unlock();
+
 	/*
 	 * The iteration loop goes backward because
 	 * rules should be matched in the precedence
