@@ -272,7 +272,7 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule, uint8
 	struct iphdr *iph;
 	struct tcphdr *tcphdr;
 	struct udphdr *udphdr;
-	uint16_t src_port, dst_port;
+	uint16_t src_port = 0, dst_port = 0;
 	struct vlan_hdr *vhdr;
 	int16_t vlan_id;
 	uint16_t dscp;
@@ -323,6 +323,7 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule, uint8
 		}
 	}
 
+	eth_header = (struct ethhdr *)skb->data;
 	if (flags & SP_RULE_FLAG_MATCH_VLAN_ID) {
 		uint16_t ether_type = ntohs(eth_header->h_proto);
 
