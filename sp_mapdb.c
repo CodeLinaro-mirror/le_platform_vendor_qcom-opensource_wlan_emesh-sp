@@ -275,7 +275,6 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule, uint8
 	uint16_t src_port = 0, dst_port = 0;
 	struct vlan_hdr *vhdr;
 	int16_t vlan_id;
-	uint16_t dscp;
 	bool compare_result, sense;
 	uint32_t flags = rule->inner.flags;
 
@@ -367,7 +366,9 @@ static bool sp_mapdb_rule_match(struct sk_buff *skb, struct sp_rule *rule, uint8
 
 	if (flags & SP_RULE_FLAG_MATCH_DSCP) {
 
-		dscp = ip_hdr(skb)->tos & 0xfc;
+		uint16_t dscp;
+
+		dscp = ipv4_get_dsfield(ip_hdr(skb)) >> 2;
 
 		DEBUG_INFO("Matching DSCP..\n");
 		DEBUG_INFO("skb DSCP = %u\n", dscp);
