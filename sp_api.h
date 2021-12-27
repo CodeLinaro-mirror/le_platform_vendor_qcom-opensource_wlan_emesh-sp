@@ -204,11 +204,47 @@ struct sp_rule {
 	uint8_t classifier_type;				/* rule_type:0 for Emesh case, and 1 for SAWF */
 };
 
-sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule*);
+/*
+ * sp_3tuple_info
+ * 	This structure lists 3 tuple parameters related to source/destination
+ */
+struct sp_3tuple_info {
+	uint8_t mac[ETH_HLEN];		/* MAC address */
+	uint16_t port;			/* Port ID */
+	union {
+		uint32_t ipv4_addr;		/* IPV4 address */
+		uint32_t ipv6_addr[4];		/* IPV6 address */
+	} ip;
+};
+
+/*
+ * sp_rule_input_params
+ * 	This structure lists input parameters for ecm query
+ */
+struct sp_rule_input_params {
+	struct sp_3tuple_info src;		/* Source 3 tuple parameters */
+	struct sp_3tuple_info dst;		/* Destination 3 tuple parameters */
+	uint16_t protocol;			/* Protocol number */
+	uint8_t dscp;				/* DSCP value */
+	uint8_t pcp;				/* Priority */
+};
+
+/*
+ * sp_rule_output_params
+ * 	This structure lists output parameters from SPM to ECM
+ */
+struct sp_rule_output_params {
+	uint8_t service_class_id;	/* Service class ID */
+	uint16_t rule_id;		/* Rule ID */
+};
+
+sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule, uint8_t rule_type);
 
 void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb, uint8_t *service_interval_dl, uint32_t *burst_size_dl, uint8_t *service_interval_ul, uint32_t *burst_size_ul, uint8_t *smac, uint8_t *dmac);
 void sp_mapdb_apply(struct sk_buff *skb, uint8_t *smac, uint8_t *dmac);
 int sp_mapdb_rule_update_register_notify(void (*sp_mapdb_rule_update_callback)(uint8_t add_rm_md, uint32_t valid_flag, struct sp_rule *r));
 void sp_mapdb_rule_update_unregister_notify(void);
 void sp_mapdb_ruletable_flush(void);
+void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *params,
+			      struct sp_rule_output_params *rule_output);
 #endif
