@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
@@ -48,6 +50,7 @@
 #define	SP_RULE_FLAG_MATCH_VLAN_ID_SENSE	0x400000	/* VLAN id sense mask */
 #define	SP_RULE_FLAG_MATCH_DSCP			0x800000	/* Match dscp match mask */
 #define	SP_RULE_FLAG_MATCH_DSCP_SENSE		0x1000000	/* DSCP sense mask */
+#define	SP_RULE_FLAG_MATCH_VLAN_PCP		0x2000000	/* Vlan priority match mask */
 
 /*
  * sp_mapdb_update_results
@@ -89,6 +92,7 @@ typedef enum sp_mapdb_notify_types sp_mapdb_notify_type_t;
 enum sp_mapdb_add_remove_filter_types {
 	SP_MAPDB_ADD_REMOVE_FILTER_DELETE, 		/* Delete a rule. */
 	SP_MAPDB_ADD_REMOVE_FILTER_ADD, 		/* Add a rule. */
+	SP_MAPDB_ADD_REMOVE_FILTER_QUERY,		/* Query rule table */
 };
 typedef enum sp_mapdb_add_remove_filter_types sp_mapdb_add_remove_filter_type_t;
 
@@ -169,6 +173,23 @@ struct sp_rule_inner {
 	 */
 	uint32_t burst_size_dl;
 	uint32_t burst_size_ul;
+	/*
+	 * Vlan Priority
+	 */
+	uint8_t vlan_pcp;
+	/*
+	 * Service class id
+	 */
+	uint8_t service_class_id;
+};
+
+/*
+ * sp_rule_classifier_type
+ * 	This enum defines rule classifier type
+ */
+enum sp_rule_classifier_type {
+	SP_RULE_TYPE_MESH,	/* For non-sawf rule */
+	SP_RULE_TYPE_SAWF,	/* For SAWF rule */
 };
 
 /*
@@ -180,6 +201,7 @@ struct sp_rule {
 	sp_mapdb_add_remove_filter_type_t cmd;			/* Command type. 1 means add 0 means delete. */
 	struct sp_rule_inner inner;				/* Inner structure */
 	uint8_t rule_precedence;				/* Rule precedence – higher number means higher priority. */
+	uint8_t classifier_type;				/* rule_type:0 for Emesh case, and 1 for SAWF */
 };
 
 sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule*);

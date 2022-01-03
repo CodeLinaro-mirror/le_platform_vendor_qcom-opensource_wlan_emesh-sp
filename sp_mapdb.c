@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
  * copyright notice and this permission notice appear in all copies.
@@ -18,6 +20,7 @@
 #include <linux/netfilter.h>
 #include <linux/etherdevice.h>
 #include <linux/if_vlan.h>
+#include <net/genetlink.h>
 
 #include "sp_mapdb.h"
 #include "sp_types.h"
@@ -694,6 +697,23 @@ void sp_mapdb_rule_update_unregister_notify(void)
 EXPORT_SYMBOL(sp_mapdb_rule_update_unregister_notify);
 
 /*
+ * sp_mapdb_rule_print_input_params()
+ * 	Print the input parameters of current rule.
+ */
+static inline void sp_mapdb_rule_print_input_params(struct sp_mapdb_rule_node *curnode)
+{
+	printk("\n........INPUT PARAMS........\n");
+	printk("src_mac: %pM, dst_mac: %pM, src_port: %d, dst_port: %d\n",
+			curnode->rule.inner.sa, curnode->rule.inner.da, curnode->rule.inner.src_port, curnode->rule.inner.dst_port);
+	printk("dscp: %d, vlan_id: %d, vlan_pcp: %d, protocol_number: %d\n",
+			curnode->rule.inner.dscp, curnode->rule.inner.vlan_id, curnode->rule.inner.vlan_pcp, curnode->rule.inner.protocol_number);
+
+	printk("src_ipv4: %pI4, dst_ipv4: %pI4\n", &curnode->rule.inner.src_ipv4_addr, &curnode->rule.inner.dst_ipv4_addr);
+
+	printk("src_ipv6: %pI6: dst_ipv6: %pI6\n", &curnode->rule.inner.src_ipv6_addr, &curnode->rule.inner.dst_ipv6_addr);
+}
+
+/*
  * sp_mapdb_ruletable_print()
  *	Print the rule table.
  */
@@ -706,11 +726,12 @@ void sp_mapdb_ruletable_print(void)
 	printk("\n====Rule table start====\nTotal rule count = %d\n", rule_manager.rule_count);
 	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
 		if (!list_empty(&(rule_manager.prec_map[i].rule_list))) {
-			printk("\nPrecedence=%d:\n", i);
-		}
-
-		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
-			printk("[id=%d, precedence=%d, output=%d] v\n", curnode->rule.id, curnode->rule.rule_precedence, curnode->rule.inner.rule_output);
+			list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
+				printk("\nid: %d, classifier_type: %d, precedence: %d\n", curnode->rule.id, curnode->rule.classifier_type, curnode->rule.rule_precedence);
+				sp_mapdb_rule_print_input_params(curnode);
+				printk("\n........OUTPUT PARAMS........\n");
+				printk("output(priority): %d, service_class_id: %d\n", curnode->rule.inner.rule_output, curnode->rule.inner.service_class_id);
+			}
 		}
 	}
 	rcu_read_unlock();
@@ -783,10 +804,226 @@ void sp_mapdb_init(void)
 }
 
 /*
+ * sp_mapdb_rule_receive()
+ * 	Handles a netlink message from userspace for rule add/delete/update
+ */
+static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *info)
+{
+	struct sp_rule to_sawf_sp = {0};
+	int rule_cmd;
+	uint32_t mask = 0;
+
+	rcu_read_lock();
+	DEBUG_INFO("Recieved rule...\n");
+
+	if (info->attrs[SP_GNL_ATTR_ID]) {
+		to_sawf_sp.id = nla_get_u32(info->attrs[SP_GNL_ATTR_ID]);
+		DEBUG_INFO("Rule id:  0x%x \n", to_sawf_sp.id);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_ADD_DELETE_RULE]) {
+		rule_cmd = nla_get_u8(info->attrs[SP_GNL_ATTR_ADD_DELETE_RULE]);
+		if (!rule_cmd) {
+			to_sawf_sp.cmd = SP_MAPDB_ADD_REMOVE_FILTER_DELETE;
+			DEBUG_INFO("Deleting rule \n");
+		} else if (rule_cmd == 1) {
+			to_sawf_sp.cmd = SP_MAPDB_ADD_REMOVE_FILTER_ADD;
+			DEBUG_INFO("Adding rule \n");
+		} else {
+			DEBUG_ERROR("Invalid rule cmd\n");
+			return -EINVAL;
+		}
+	}
+
+	if (info->attrs[SP_GNL_ATTR_RULE_PRECEDENCE]) {
+		to_sawf_sp.rule_precedence = nla_get_u8(info->attrs[SP_GNL_ATTR_RULE_PRECEDENCE]);
+		DEBUG_INFO("Rule precedence: 0x%x\n", to_sawf_sp.rule_precedence);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_RULE_OUTPUT]) {
+		to_sawf_sp.inner.rule_output = nla_get_u8(info->attrs[SP_GNL_ATTR_RULE_OUTPUT]);
+		DEBUG_INFO("Rule output: 0x%x\n", to_sawf_sp.inner.rule_output);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_USER_PRIORITY]) {
+		to_sawf_sp.inner.user_priority = nla_get_u8(info->attrs[SP_GNL_ATTR_USER_PRIORITY]);
+		DEBUG_INFO("User priority: 0x%x\n", to_sawf_sp.inner.user_priority);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_SERVICE_CLASS_ID]) {
+		to_sawf_sp.inner.service_class_id = nla_get_u8(info->attrs[SP_GNL_ATTR_SERVICE_CLASS_ID]);
+		DEBUG_INFO("Service_class_id: 0x%x\n", to_sawf_sp.inner.service_class_id);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_SRC_PORT]) {
+		to_sawf_sp.inner.src_port = nla_get_u16(info->attrs[SP_GNL_ATTR_SRC_PORT]);
+		mask |= SP_RULE_FLAG_MATCH_SRC_PORT;
+		DEBUG_INFO("Source port: 0x%x\n", to_sawf_sp.inner.src_port);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_DST_PORT]) {
+		to_sawf_sp.inner.dst_port = nla_get_u16(info->attrs[SP_GNL_ATTR_DST_PORT]);
+		mask |= SP_RULE_FLAG_MATCH_DST_PORT;
+		DEBUG_INFO("Destination port: 0x%x\n", to_sawf_sp.inner.dst_port);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_SRC_MAC]) {
+		memcpy(to_sawf_sp.inner.sa, nla_data(info->attrs[SP_GNL_ATTR_SRC_MAC]), ETH_ALEN);
+		mask |= SP_RULE_FLAG_MATCH_SOURCE_MAC;
+		DEBUG_INFO("sa = %pM \n", to_sawf_sp.inner.sa);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_DST_MAC]) {
+		memcpy(to_sawf_sp.inner.da, nla_data(info->attrs[SP_GNL_ATTR_DST_MAC]), ETH_ALEN);
+		mask |= SP_RULE_FLAG_MATCH_DST_MAC;
+		DEBUG_INFO("da = %pM \n", to_sawf_sp.inner.da);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR] &&
+	    info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]) {
+		to_sawf_sp.inner.src_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR]);
+		mask |= SP_RULE_FLAG_MATCH_SRC_IPV4;
+		DEBUG_INFO("src_ipv4 = %pI4 \n", &to_sawf_sp.inner.src_ipv4_addr);
+
+		to_sawf_sp.inner.dst_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]);
+		mask |= SP_RULE_FLAG_MATCH_DST_IPV4;
+		DEBUG_INFO("dst_ipv4 = %pI4 \n", &to_sawf_sp.inner.dst_ipv4_addr);
+	} else if (info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR] &&
+		   info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]) {
+		struct in6_addr saddr;
+		struct in6_addr daddr;
+
+		saddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR]);
+		daddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]);
+
+		memcpy(to_sawf_sp.inner.src_ipv6_addr, saddr.s6_addr32, sizeof(struct in6_addr));
+		memcpy(to_sawf_sp.inner.dst_ipv6_addr, daddr.s6_addr32, sizeof(struct in6_addr));
+
+		mask |= SP_RULE_FLAG_MATCH_SRC_IPV6;
+		mask |= SP_RULE_FLAG_MATCH_DST_IPV6;
+		DEBUG_INFO("src_ipv6 = %pI6, dst_ipv6 = %pI6\n",
+			   &to_sawf_sp.inner.src_ipv6_addr, &to_sawf_sp.inner.dst_ipv6_addr);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_PROTOCOL_NUMBER]) {
+		to_sawf_sp.inner.protocol_number = nla_get_u8(info->attrs[SP_GNL_ATTR_PROTOCOL_NUMBER]);
+		mask |= SP_RULE_FLAG_MATCH_PROTOCOL;
+		DEBUG_INFO("protocol_number: 0x%x\n", to_sawf_sp.inner.protocol_number);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_VLAN_ID]) {
+		to_sawf_sp.inner.vlan_id = nla_get_u16(info->attrs[SP_GNL_ATTR_VLAN_ID]);
+		mask |= SP_RULE_FLAG_MATCH_VLAN_ID;
+		DEBUG_INFO("vlan_id: 0x%x\n", to_sawf_sp.inner.vlan_id);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_DSCP]) {
+		to_sawf_sp.inner.dscp = nla_get_u8(info->attrs[SP_GNL_ATTR_DSCP]);
+		mask |= SP_RULE_FLAG_MATCH_DSCP;
+		DEBUG_INFO("dscp: 0x%x\n", to_sawf_sp.inner.dscp);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_VLAN_PCP]) {
+		to_sawf_sp.inner.vlan_pcp = nla_get_u8(info->attrs[SP_GNL_ATTR_VLAN_PCP]);
+		mask |= SP_RULE_FLAG_MATCH_VLAN_PCP;
+		DEBUG_INFO("vlan_pcp: 0x%x\n", to_sawf_sp.inner.vlan_pcp);
+	}
+
+	rcu_read_unlock();
+
+	to_sawf_sp.inner.flags = mask;
+
+	/*
+	 * Update rules in database
+	 */
+	sp_mapdb_rule_update(&to_sawf_sp);
+	return 0;
+}
+
+
+/*
+ * sp_genl_policy
+ * 	Policy attributes
+ */
+static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
+	[SP_GNL_ATTR_ID]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_ADD_DELETE_RULE]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_RULE_PRECEDENCE]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_RULE_OUTPUT]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_USER_PRIORITY]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_SRC_MAC]		= { .len = ETH_ALEN, },
+	[SP_GNL_ATTR_DST_MAC]		= { .len = ETH_ALEN, },
+	[SP_GNL_ATTR_SRC_IPV4_ADDR]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_DST_IPV4_ADDR]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_SRC_IPV6_ADDR]		= { .len = sizeof(struct in6_addr) },
+	[SP_GNL_ATTR_DST_IPV6_ADDR]		= { .len = sizeof(struct in6_addr) },
+	[SP_GNL_ATTR_SRC_PORT]		= { .type = NLA_U16, },
+	[SP_GNL_ATTR_DST_PORT]		= { .type = NLA_U16, },
+	[SP_GNL_ATTR_PROTOCOL_NUMBER]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_VLAN_ID]		= { .type = NLA_U16, },
+	[SP_GNL_ATTR_DSCP]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_VLAN_PCP]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_SERVICE_CLASS_ID]		= { .type = NLA_U8, },
+};
+
+/* Spm generic netlink operations */
+static const struct genl_ops sp_genl_ops[] = {
+	{
+		.cmd = SPM_CMD_RULE_ACTION,
+		.doit = sp_mapdb_rule_receive,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+		.flags = GENL_ADMIN_PERM,
+	},
+};
+
+/* Spm generic family */
+static struct genl_family sp_genl_family = {
+	.name           = "spm",
+	.version        = 0,
+	.hdrsize        = 0,
+	.maxattr        = SP_GNL_MAX,
+	.policy 	= sp_genl_policy,
+	.netnsok        = true,
+	.module         = THIS_MODULE,
+	.ops            = sp_genl_ops,
+	.n_ops          = ARRAY_SIZE(sp_genl_ops),
+};
+
+/*
  * sp_mapdb_fini()
  * 	This is the function called when SPM is unloaded.
  */
 void sp_mapdb_fini(void)
 {
 	sp_mapdb_ruletable_flush();
+}
+
+/*
+ * sp_netlink_init()
+ * 	Initialize generic netlink
+ */
+bool sp_netlink_init(void)
+{
+	int err;
+	err = genl_register_family(&sp_genl_family);
+	if (err) {
+		DEBUG_ERROR("Failed to register sp generic netlink family with error: %d\n", err);
+		return false;
+	}
+	return true;
+}
+
+/*
+ * sp_netlink_exit()
+ * 	Netlink exit
+ */
+bool sp_netlink_exit(void)
+{
+	int err;
+	err = genl_unregister_family(&sp_genl_family);
+	if (err) {
+		DEBUG_ERROR("Failed to unregister sp generic netlink family with error: %d\n", err);
+		return false;
+	}
+	return true;
 }
