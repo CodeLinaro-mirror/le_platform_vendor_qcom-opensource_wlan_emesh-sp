@@ -41,6 +41,7 @@
 enum sp_gnl_cmds {
 	SPM_CMD_RULE_UNSPEC,
 	SPM_CMD_RULE_ACTION,
+	SPM_CMD_RULE_QUERY,
 	SPM_CMD_MAX,
 };
 

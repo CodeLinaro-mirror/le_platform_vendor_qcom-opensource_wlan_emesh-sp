@@ -37,6 +37,9 @@ static __rcu sp_mapdb_rule_update_callback_t sp_callback;
 /* TSL protection of single writer rule update. */
 static unsigned long single_writer = 0;
 
+/* Spm generic netlink family */
+static struct genl_family sp_genl_family;
+
 /*
  * sp_mapdb_rules_init()
  * 	Initializes prec_map and ruleid_hashmap.
@@ -1110,6 +1113,99 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	return 0;
 }
 
+/*
+ * sp_mapdb_rule_query()
+ * 	Handles a netlink message from userspace for rule query
+ */
+static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *info)
+{
+	uint32_t rule_id;
+	struct sp_rule rule;
+	struct sp_mapdb_rule_id_hashentry *cur_hashentry = NULL;
+	void *hdr;
+	struct sk_buff *msg = NULL;
+
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!msg) {
+		DEBUG_WARN("Failed to allocate netlink message to accomodate rule\n");
+		return -ENOMEM;
+	}
+
+	hdr = genlmsg_put(msg, info->snd_portid, info->snd_seq,
+			  &sp_genl_family, 0, SPM_CMD_RULE_QUERY);
+	if (!hdr) {
+		DEBUG_WARN("Failed to put hdr in netlink buffer\n");
+		nlmsg_free(msg);
+		return -ENOMEM;
+	}
+
+	rcu_read_lock();
+	rule_id = nla_get_u32(info->attrs[SP_GNL_ATTR_ID]);
+	DEBUG_INFO("User requested rule with rule_id: 0x%x \n", rule_id);
+	rcu_read_unlock();
+
+	spin_lock(&sp_mapdb_lock);
+	if (!rule_manager.rule_count) {
+		spin_unlock(&sp_mapdb_lock);
+		DEBUG_WARN("Requested rule table is empty\n");
+		goto put_failure;
+	}
+
+	cur_hashentry = sp_mapdb_search_hashentry(rule_id, SP_RULE_TYPE_SAWF);
+	if (!cur_hashentry) {
+		spin_unlock(&sp_mapdb_lock);
+		DEBUG_WARN("Invalid rule with ruleID = %d, rule_type: %d\n", rule_id, SP_RULE_TYPE_SAWF);
+		goto put_failure;
+	}
+
+	rule = cur_hashentry->rule_node->rule;
+	spin_unlock(&sp_mapdb_lock);
+
+	if (nla_put_u32(msg, SP_GNL_ATTR_ID, rule.id) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_RULE_PRECEDENCE, rule.rule_precedence) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_RULE_OUTPUT, rule.inner.rule_output) ||
+	    nla_put(msg, SP_GNL_ATTR_SRC_MAC, ETH_ALEN, rule.inner.sa) ||
+	    nla_put(msg, SP_GNL_ATTR_DST_MAC, ETH_ALEN, rule.inner.da)) {
+		goto put_failure;
+	}
+
+	if (rule.inner.src_ipv4_addr) {
+		if (nla_put_in_addr(msg, SP_GNL_ATTR_SRC_IPV4_ADDR, rule.inner.src_ipv4_addr) ||
+		    nla_put_in_addr(msg, SP_GNL_ATTR_DST_IPV4_ADDR, rule.inner.dst_ipv4_addr)) {
+			goto put_failure;
+		}
+	} else {
+		struct in6_addr saddr;
+		struct in6_addr daddr;
+
+		memcpy(&saddr, rule.inner.src_ipv6_addr, 6);
+		memcpy(&daddr, rule.inner.dst_ipv6_addr, sizeof(struct in6_addr));
+
+		if (nla_put_in6_addr(msg, SP_GNL_ATTR_DST_IPV6_ADDR, &daddr) ||
+		    nla_put_in6_addr(msg, SP_GNL_ATTR_SRC_IPV6_ADDR, &saddr)) {
+			goto put_failure;
+		}
+	}
+
+	if (nla_put_u16(msg, SP_GNL_ATTR_SRC_PORT, rule.inner.src_port) ||
+	    nla_put_u16(msg, SP_GNL_ATTR_DST_PORT, rule.inner.dst_port) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_PROTOCOL_NUMBER, rule.inner.protocol_number) ||
+	    nla_put_u16(msg, SP_GNL_ATTR_VLAN_ID, rule.inner.vlan_id) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_DSCP, rule.inner.dscp) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP, rule.inner.vlan_pcp) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id)) {
+		goto put_failure;
+	}
+
+	genlmsg_end(msg, hdr);
+	return genlmsg_reply(msg, info);
+
+put_failure:
+	genlmsg_cancel(msg, hdr);
+	nlmsg_free(msg);
+	return -EMSGSIZE;
+}
+
 
 /*
  * sp_genl_policy
@@ -1141,6 +1237,12 @@ static const struct genl_ops sp_genl_ops[] = {
 	{
 		.cmd = SPM_CMD_RULE_ACTION,
 		.doit = sp_mapdb_rule_receive,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+		.flags = GENL_ADMIN_PERM,
+	},
+	{
+		.cmd = SPM_CMD_RULE_QUERY,
+		.doit = sp_mapdb_rule_query,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.flags = GENL_ADMIN_PERM,
 	},
