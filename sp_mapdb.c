@@ -624,7 +624,7 @@ EXPORT_SYMBOL(sp_mapdb_ruletable_flush);
 
 /*
  * sp_mapdb_rule_update()
- * 	Perfoms rule update.
+ * 	Perfoms rule update
  *
  * It will first check the add/remove filter bit of
  * the newrule and pass it to sp_mapdb_rule_add and sp_mapdb_rule_delete acccordingly.
@@ -633,7 +633,7 @@ EXPORT_SYMBOL(sp_mapdb_ruletable_flush);
  * and field_update (meaning whether the field(other than precence)
  * is modified), these are useful in perform precise matching in ECM.
  */
-sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule, uint8_t rule_type)
+sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule)
 {
 	sp_mapdb_update_result_t error_code = 0;
 
@@ -648,11 +648,11 @@ sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule, uint8_t r
 
 	switch (newrule->cmd) {
 	case SP_MAPDB_ADD_REMOVE_FILTER_DELETE:
-		error_code = sp_mapdb_rule_delete(newrule->id, rule_type);
+		error_code = sp_mapdb_rule_delete(newrule->id, newrule->classifier_type);
 		break;
 
 	case SP_MAPDB_ADD_REMOVE_FILTER_ADD:
-		error_code = sp_mapdb_rule_add(newrule, rule_type);
+		error_code = sp_mapdb_rule_add(newrule, newrule->classifier_type);
 		break;
 
 	default:
@@ -1104,12 +1104,20 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 
 	rcu_read_unlock();
 
+	/*
+	 * Update flag mask for valid rules
+	 */
 	to_sawf_sp.inner.flags = mask;
+
+	/*
+	 * Update classifier_type as SAWF rules
+	 */
+	to_sawf_sp.classifier_type = SP_RULE_TYPE_SAWF;
 
 	/*
 	 * Update rules in database
 	 */
-	sp_mapdb_rule_update(&to_sawf_sp, SP_RULE_TYPE_SAWF);
+	sp_mapdb_rule_update(&to_sawf_sp);
 	return 0;
 }
 

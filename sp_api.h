@@ -238,7 +238,7 @@ struct sp_rule_output_params {
 	uint16_t rule_id;		/* Rule ID */
 };
 
-sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule, uint8_t rule_type);
+sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule);
 
 void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb, uint8_t *service_interval_dl, uint32_t *burst_size_dl, uint8_t *service_interval_ul, uint32_t *burst_size_ul, uint8_t *smac, uint8_t *dmac);
 void sp_mapdb_apply(struct sk_buff *skb, uint8_t *smac, uint8_t *dmac);
