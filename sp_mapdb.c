@@ -1052,30 +1052,32 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		DEBUG_INFO("da = %pM \n", to_sawf_sp.inner.da);
 	}
 
-	if (info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR] &&
-	    info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]) {
+	if (info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR]) {
 		to_sawf_sp.inner.src_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR]);
 		mask |= SP_RULE_FLAG_MATCH_SRC_IPV4;
 		DEBUG_INFO("src_ipv4 = %pI4 \n", &to_sawf_sp.inner.src_ipv4_addr);
+	}
 
+	if (info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]) {
 		to_sawf_sp.inner.dst_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]);
 		mask |= SP_RULE_FLAG_MATCH_DST_IPV4;
 		DEBUG_INFO("dst_ipv4 = %pI4 \n", &to_sawf_sp.inner.dst_ipv4_addr);
-	} else if (info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR] &&
-		   info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]) {
+	}
+
+	if (info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR]) {
 		struct in6_addr saddr;
-		struct in6_addr daddr;
-
 		saddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR]);
-		daddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]);
-
 		memcpy(to_sawf_sp.inner.src_ipv6_addr, saddr.s6_addr32, sizeof(struct in6_addr));
-		memcpy(to_sawf_sp.inner.dst_ipv6_addr, daddr.s6_addr32, sizeof(struct in6_addr));
-
 		mask |= SP_RULE_FLAG_MATCH_SRC_IPV6;
+		DEBUG_INFO("src_ipv6 = %pI6 \n", &to_sawf_sp.inner.src_ipv6_addr);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]) {
+		struct in6_addr daddr;
+		daddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]);
+		memcpy(to_sawf_sp.inner.dst_ipv6_addr, daddr.s6_addr32, sizeof(struct in6_addr));
 		mask |= SP_RULE_FLAG_MATCH_DST_IPV6;
-		DEBUG_INFO("src_ipv6 = %pI6, dst_ipv6 = %pI6\n",
-			   &to_sawf_sp.inner.src_ipv6_addr, &to_sawf_sp.inner.dst_ipv6_addr);
+		DEBUG_INFO("dst_ipv6 = %pI6\n", &to_sawf_sp.inner.dst_ipv6_addr);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_PROTOCOL_NUMBER]) {
@@ -1132,6 +1134,8 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	struct sp_mapdb_rule_id_hashentry *cur_hashentry = NULL;
 	void *hdr;
 	struct sk_buff *msg = NULL;
+	struct in6_addr saddr;
+	struct in6_addr daddr;
 
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!msg) {
@@ -1177,22 +1181,17 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 		goto put_failure;
 	}
 
-	if (rule.inner.src_ipv4_addr) {
-		if (nla_put_in_addr(msg, SP_GNL_ATTR_SRC_IPV4_ADDR, rule.inner.src_ipv4_addr) ||
-		    nla_put_in_addr(msg, SP_GNL_ATTR_DST_IPV4_ADDR, rule.inner.dst_ipv4_addr)) {
-			goto put_failure;
-		}
-	} else {
-		struct in6_addr saddr;
-		struct in6_addr daddr;
+	if (nla_put_in_addr(msg, SP_GNL_ATTR_SRC_IPV4_ADDR, rule.inner.src_ipv4_addr) ||
+	    nla_put_in_addr(msg, SP_GNL_ATTR_DST_IPV4_ADDR, rule.inner.dst_ipv4_addr)) {
+		goto put_failure;
+	}
 
-		memcpy(&saddr, rule.inner.src_ipv6_addr, 6);
-		memcpy(&daddr, rule.inner.dst_ipv6_addr, sizeof(struct in6_addr));
+	memcpy(&saddr, rule.inner.src_ipv6_addr, sizeof(struct in6_addr));
+	memcpy(&daddr, rule.inner.dst_ipv6_addr, sizeof(struct in6_addr));
 
-		if (nla_put_in6_addr(msg, SP_GNL_ATTR_DST_IPV6_ADDR, &daddr) ||
-		    nla_put_in6_addr(msg, SP_GNL_ATTR_SRC_IPV6_ADDR, &saddr)) {
-			goto put_failure;
-		}
+	if (nla_put_in6_addr(msg, SP_GNL_ATTR_DST_IPV6_ADDR, &daddr) ||
+	    nla_put_in6_addr(msg, SP_GNL_ATTR_SRC_IPV6_ADDR, &saddr)) {
+		goto put_failure;
 	}
 
 	if (nla_put_u16(msg, SP_GNL_ATTR_SRC_PORT, rule.inner.src_port) ||
