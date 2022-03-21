@@ -235,6 +235,7 @@ struct sp_rule_input_params {
  */
 struct sp_rule_output_params {
 	uint8_t service_class_id;	/* Service class ID */
+	uint8_t priority;		/* Priority */
 	uint16_t rule_id;		/* Rule ID */
 };
 

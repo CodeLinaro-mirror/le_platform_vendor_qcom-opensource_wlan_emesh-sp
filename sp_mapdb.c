@@ -970,9 +970,9 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 	}
 
 set_output:
-	skb->priority = output;
 	rule_output->service_class_id = service_class_id;
 	rule_output->rule_id = rule_id;
+	rule_output->priority = output;
 }
 EXPORT_SYMBOL(sp_mapdb_rule_apply_sawf);
 
