@@ -51,6 +51,12 @@
 #define	SP_RULE_FLAG_MATCH_DSCP			0x800000	/* Match dscp match mask */
 #define	SP_RULE_FLAG_MATCH_DSCP_SENSE		0x1000000	/* DSCP sense mask */
 #define	SP_RULE_FLAG_MATCH_VLAN_PCP		0x2000000	/* Vlan priority match mask */
+#define	SP_RULE_FLAG_MATCH_SRC_IPV4_MASK	0x4000000	/* Source ipv4 address mask */
+#define	SP_RULE_FLAG_MATCH_DST_IPV4_MASK	0x8000000	/* Destination ipv4 address mask */
+#define	SP_RULE_FLAG_MATCH_SRC_IPV6_MASK	0x10000000	/* Source ipv6 address mask */
+#define	SP_RULE_FLAG_MATCH_DST_IPV6_MASK	0x20000000	/* Destination ipv6 address mask */
+
+#define IPV6_ADDR_LEN		4
 
 #define	SP_RULE_INVALID_VLAN_TCI		0xFFFF		/* Invalid vlan tci */
 
@@ -130,7 +136,7 @@ struct sp_rule_inner {
 	/*
 	 * Source ipv6 address
 	 */
-	uint32_t src_ipv6_addr[4];
+	uint32_t src_ipv6_addr[IPV6_ADDR_LEN];
 	/*
 	 * Destination ipv4 address
 	 */
@@ -138,7 +144,7 @@ struct sp_rule_inner {
 	/*
 	 * Destination ipv6 address
 	 */
-	uint32_t dst_ipv6_addr[4];
+	uint32_t dst_ipv6_addr[IPV6_ADDR_LEN];
 	/*
 	 * Source port number
 	 */
@@ -183,6 +189,26 @@ struct sp_rule_inner {
 	 * Service class id
 	 */
 	uint8_t service_class_id;
+
+	/*
+	 * Source ipv4 address mask
+	 */
+	uint32_t src_ipv4_addr_mask;
+
+	/*
+	 * Destination ipv4 address mask
+	 */
+	uint32_t dst_ipv4_addr_mask;
+
+	/*
+	 * Source ipv6 address mask
+	 */
+	uint32_t src_ipv6_addr_mask[IPV6_ADDR_LEN];
+
+	/*
+	 * Destination ipv6 address mask
+	 */
+	uint32_t dst_ipv6_addr_mask[IPV6_ADDR_LEN];
 };
 
 /*
