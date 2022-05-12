@@ -55,9 +55,15 @@
 #define	SP_RULE_FLAG_MATCH_DST_IPV4_MASK	0x8000000	/* Destination ipv4 address mask */
 #define	SP_RULE_FLAG_MATCH_SRC_IPV6_MASK	0x10000000	/* Source ipv6 address mask */
 #define	SP_RULE_FLAG_MATCH_DST_IPV6_MASK	0x20000000	/* Destination ipv6 address mask */
+#define	SP_RULE_FLAG_MATCH_DSCP_REMARK		0x40000000	/* Match dscp remark mask */
+#define	SP_RULE_FLAG_MATCH_VLAN_PCP_REMARK	0x80000000	/* Vlan priority remark mask */
 
 #define IPV6_ADDR_LEN		4
 
+#define	SP_RULE_INVALID_SERVICE_CLASS_ID	0xFF		/* Invalid Service class ID */
+#define	SP_RULE_INVALID_DSCP_REMARK		0xFF		/* Invalid DSCP remark */
+#define	SP_RULE_INVALID_VLAN_PCP_REMARK		0xFF		/* Invalid vlan PCP remark */
+#define	SP_RULE_INVALID_RULE_ID			0xFFFF		/* Invalid Rule ID */
 #define	SP_RULE_INVALID_VLAN_TCI		0xFFFF		/* Invalid vlan tci */
 
 /*
@@ -166,6 +172,10 @@ struct sp_rule_inner {
 	 */
 	uint8_t dscp;
 	/*
+	 * DSCP remark
+	 */
+	uint8_t dscp_remark;
+	/*
 	 * Service interval
 	 * Specified msec
 	 * This is min latency expectation and is used
@@ -185,6 +195,10 @@ struct sp_rule_inner {
 	 * Vlan Priority
 	 */
 	uint8_t vlan_pcp;
+	/*
+	 * Vlan Priority Remark
+	 */
+	uint8_t vlan_pcp_remark;
 	/*
 	 * Service class id
 	 */
@@ -264,6 +278,8 @@ struct sp_rule_input_params {
 struct sp_rule_output_params {
 	uint8_t service_class_id;	/* Service class ID */
 	uint8_t priority;		/* Priority */
+	uint8_t dscp_remark;		/* DSCP remark */
+	uint8_t vlan_pcp_remark;	/* Vlan PCP remark */
 	uint16_t rule_id;		/* Rule ID */
 };
 

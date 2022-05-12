@@ -714,8 +714,8 @@ static inline void sp_mapdb_rule_print_input_params(struct sp_mapdb_rule_node *c
 	printk("\n........INPUT PARAMS........\n");
 	printk("src_mac: %pM, dst_mac: %pM, src_port: %d, dst_port: %d\n",
 			curnode->rule.inner.sa, curnode->rule.inner.da, curnode->rule.inner.src_port, curnode->rule.inner.dst_port);
-	printk("dscp: %d, vlan_id: %d, vlan_pcp: %d, protocol_number: %d\n",
-			curnode->rule.inner.dscp, curnode->rule.inner.vlan_id, curnode->rule.inner.vlan_pcp, curnode->rule.inner.protocol_number);
+	printk("dscp: %d, dscp remark: %d, vlan id: %d, vlan pcp: %d, vlan pcp remark: %d, protocol no: %d\n",
+			curnode->rule.inner.dscp, curnode->rule.inner.dscp_remark, curnode->rule.inner.vlan_id, curnode->rule.inner.vlan_pcp, curnode->rule.inner.vlan_pcp_remark, curnode->rule.inner.protocol_number);
 
 	printk("src_ipv4: %pI4, dst_ipv4: %pI4\n", &curnode->rule.inner.src_ipv4_addr, &curnode->rule.inner.dst_ipv4_addr);
 
@@ -743,6 +743,7 @@ void sp_mapdb_ruletable_print(void)
 				printk("\nid: %d, classifier_type: %d, precedence: %d\n", curnode->rule.id, curnode->rule.classifier_type, curnode->rule.rule_precedence);
 				sp_mapdb_rule_print_input_params(curnode);
 				printk("\n........OUTPUT PARAMS........\n");
+				printk("dscp_remark: %d, vlan_pcp_remark: %d\n", curnode->rule.inner.dscp_remark, curnode->rule.inner.vlan_pcp_remark);
 				printk("output(priority): %d, service_class_id: %d\n", curnode->rule.inner.rule_output, curnode->rule.inner.service_class_id);
 			}
 		}
@@ -920,7 +921,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		DEBUG_INFO("rule DSCP = %u\n", rule->inner.dscp);
 		compare_result = params->dscp == rule->inner.dscp;
 		if (!compare_result) {
-			DEBUG_WARN("SRC dscp match failed!\n");
+			DEBUG_WARN("DSCP match failed!\n");
 			return false;
 		}
 	}
@@ -975,9 +976,11 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 {
 	int i;
 	struct sp_mapdb_rule_node *curnode;
-	uint8_t service_class_id = 0xFF;
+	uint8_t dscp_remark = SP_RULE_INVALID_DSCP_REMARK;
+	uint8_t vlan_pcp_remark = SP_RULE_INVALID_VLAN_PCP_REMARK;
+	uint8_t service_class_id = SP_RULE_INVALID_SERVICE_CLASS_ID;
 	uint8_t output = SP_MAPDB_USE_DSCP;
-	uint16_t rule_id = 0xFFFF;
+	uint16_t rule_id = SP_RULE_INVALID_RULE_ID;
 
 	rcu_read_lock();
 	if (rule_manager.rule_count == 0) {
@@ -1002,6 +1005,8 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 			if (curnode->rule.classifier_type == SP_RULE_TYPE_SAWF) {
 				if (sp_mapdb_rule_match_sawf(&curnode->rule, params)) {
 					output = curnode->rule.inner.rule_output;
+					dscp_remark = curnode->rule.inner.dscp_remark;
+					vlan_pcp_remark = curnode->rule.inner.vlan_pcp_remark;
 					service_class_id = curnode->rule.inner.service_class_id;
 					rule_id = curnode->rule.id;
 					goto set_output;
@@ -1014,6 +1019,8 @@ set_output:
 	rule_output->service_class_id = service_class_id;
 	rule_output->rule_id = rule_id;
 	rule_output->priority = output;
+	rule_output->dscp_remark = dscp_remark;
+	rule_output->vlan_pcp_remark = vlan_pcp_remark;
 }
 EXPORT_SYMBOL(sp_mapdb_rule_apply_sawf);
 
@@ -1026,6 +1033,15 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	struct sp_rule to_sawf_sp = {0};
 	int rule_cmd;
 	uint32_t mask = 0;
+
+	/*
+	 * Set the invalid output values in rule to avoid these values to be set as 0's in
+	 * EMESH-SAWF classifier. If valid values are received from userspace we set the flags
+	 * and update the parameters accordingly.
+	 */
+	to_sawf_sp.inner.service_class_id = SP_RULE_INVALID_SERVICE_CLASS_ID;
+	to_sawf_sp.inner.dscp_remark = SP_RULE_INVALID_DSCP_REMARK;
+	to_sawf_sp.inner.vlan_pcp_remark = SP_RULE_INVALID_VLAN_PCP_REMARK;
 
 	rcu_read_lock();
 	DEBUG_INFO("Recieved rule...\n");
@@ -1182,10 +1198,22 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		DEBUG_INFO("dscp: 0x%x\n", to_sawf_sp.inner.dscp);
 	}
 
+	if (info->attrs[SP_GNL_ATTR_DSCP_REMARK]) {
+		to_sawf_sp.inner.dscp_remark = nla_get_u8(info->attrs[SP_GNL_ATTR_DSCP_REMARK]);
+		mask |= SP_RULE_FLAG_MATCH_DSCP_REMARK;
+		DEBUG_INFO("dscp remark: 0x%x\n", to_sawf_sp.inner.dscp_remark);
+	}
+
 	if (info->attrs[SP_GNL_ATTR_VLAN_PCP]) {
 		to_sawf_sp.inner.vlan_pcp = nla_get_u8(info->attrs[SP_GNL_ATTR_VLAN_PCP]);
 		mask |= SP_RULE_FLAG_MATCH_VLAN_PCP;
 		DEBUG_INFO("vlan_pcp: 0x%x\n", to_sawf_sp.inner.vlan_pcp);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_VLAN_PCP_REMARK]) {
+		to_sawf_sp.inner.vlan_pcp_remark = nla_get_u8(info->attrs[SP_GNL_ATTR_VLAN_PCP_REMARK]);
+		mask |= SP_RULE_FLAG_MATCH_VLAN_PCP_REMARK;
+		DEBUG_INFO("vlan_pcp_remark: 0x%x\n", to_sawf_sp.inner.vlan_pcp_remark);
 	}
 
 	rcu_read_unlock();
@@ -1297,7 +1325,9 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u8(msg, SP_GNL_ATTR_PROTOCOL_NUMBER, rule.inner.protocol_number) ||
 	    nla_put_u16(msg, SP_GNL_ATTR_VLAN_ID, rule.inner.vlan_id) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_DSCP, rule.inner.dscp) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_DSCP_REMARK, rule.inner.dscp_remark) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP, rule.inner.vlan_pcp) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP_REMARK, rule.inner.vlan_pcp_remark) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id)) {
 		goto put_failure;
 	}
@@ -1337,7 +1367,9 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_PROTOCOL_NUMBER]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_VLAN_ID]		= { .type = NLA_U16, },
 	[SP_GNL_ATTR_DSCP]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_DSCP_REMARK]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_VLAN_PCP]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_VLAN_PCP_REMARK]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_SERVICE_CLASS_ID]		= { .type = NLA_U8, },
 };
 
