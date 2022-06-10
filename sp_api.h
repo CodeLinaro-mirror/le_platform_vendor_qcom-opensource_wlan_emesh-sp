@@ -50,13 +50,30 @@
 #define	SP_RULE_FLAG_MATCH_VLAN_ID_SENSE	0x400000	/* VLAN id sense mask */
 #define	SP_RULE_FLAG_MATCH_DSCP			0x800000	/* Match dscp match mask */
 #define	SP_RULE_FLAG_MATCH_DSCP_SENSE		0x1000000	/* DSCP sense mask */
-#define	SP_RULE_FLAG_MATCH_VLAN_PCP		0x2000000	/* Vlan priority match mask */
-#define	SP_RULE_FLAG_MATCH_SRC_IPV4_MASK	0x4000000	/* Source ipv4 address mask */
-#define	SP_RULE_FLAG_MATCH_DST_IPV4_MASK	0x8000000	/* Destination ipv4 address mask */
-#define	SP_RULE_FLAG_MATCH_SRC_IPV6_MASK	0x10000000	/* Source ipv6 address mask */
-#define	SP_RULE_FLAG_MATCH_DST_IPV6_MASK	0x20000000	/* Destination ipv6 address mask */
-#define	SP_RULE_FLAG_MATCH_DSCP_REMARK		0x40000000	/* Match dscp remark mask */
-#define	SP_RULE_FLAG_MATCH_VLAN_PCP_REMARK	0x80000000	/* Vlan priority remark mask */
+
+/*
+ * sp_rule_match_flag_sawf
+ * 	Rule match mask for SAWF
+ */
+#define	SP_RULE_FLAG_MATCH_SAWF_SOURCE_MAC		0x01		/* Match sawf source mac address mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DST_MAC			0x02		/* Match sawf destination mac address mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4		0x04		/* Match sawf source ipv4 address match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6		0x08		/* Match sawf source ipv6 address match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DST_IPV4		0x10		/* Match sawf destination ipv4 address match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DST_IPV6		0x20		/* Match sawf destination ipv6 address match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_SRC_PORT		0x40		/* Match sawf source port match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DST_PORT		0x80		/* Match sawf destination port match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_PROTOCOL		0x100		/* Match sawf protocol match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_VLAN_ID			0x200		/* Match sawf VLAN id match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DSCP			0x400		/* Match sawf dscp match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP		0x800		/* Sawf Vlan priority match mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4_MASK		0x1000		/* Sawf Source ipv4 address mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DST_IPV4_MASK		0x2000		/* Sawf Destination ipv4 address mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6_MASK		0x4000		/* Sawf Source ipv6 address mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DST_IPV6_MASK		0x8000		/* Sawf Destination ipv6 address mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_DSCP_REMARK		0x10000		/* Sawf Match dscp remark mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP_REMARK		0x20000		/* Sawf Vlan priority remark mask */
+#define	SP_RULE_FLAG_MATCH_SAWF_IP_VERSION_TYPE		0x40000		/* Sawf IP version type match mask */
 
 #define IPV6_ADDR_LEN		4
 
@@ -113,12 +130,26 @@ typedef enum sp_mapdb_add_remove_filter_types sp_mapdb_add_remove_filter_type_t;
 struct sp_rule_inner {
 
 	/*
+	 * Flag bits for rule match
+	 */
+	uint32_t flags;
+
+	/*
+	 * Flag bits for sawf rule match
+	 */
+	uint32_t flags_sawf;
+
+	/*
 	 * The value of rule_output determines how to set the pcp value
 	 * to be marked in the matched packet.
+	 * Maximum possible value is 7.
 	 */
 	uint16_t rule_output;
-	uint32_t flags;				/* Flag bits for rule match */
-	uint8_t user_priority;			/* UP in 802.11 qos control */
+
+	/*
+	 * UP in 802.11 qos control
+	 */
+	uint8_t user_priority;
 
 	/*
 	 * Source mac address
@@ -223,6 +254,11 @@ struct sp_rule_inner {
 	 * Destination ipv6 address mask
 	 */
 	uint32_t dst_ipv6_addr_mask[IPV6_ADDR_LEN];
+
+	/*
+	 * IP Version type
+	 */
+	uint8_t ip_version_type;
 };
 
 /*
@@ -268,6 +304,7 @@ struct sp_rule_input_params {
 	struct sp_3tuple_info dst;		/* Destination 3 tuple parameters */
 	uint16_t protocol;			/* Protocol number */
 	uint8_t dscp;				/* DSCP value */
+	uint8_t ip_version_type;		/* IP Version type */
 	uint16_t vlan_tci;			/* Vlan TCI */
 };
 

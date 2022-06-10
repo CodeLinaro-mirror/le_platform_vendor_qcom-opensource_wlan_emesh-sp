@@ -712,10 +712,12 @@ EXPORT_SYMBOL(sp_mapdb_rule_update_unregister_notify);
 static inline void sp_mapdb_rule_print_input_params(struct sp_mapdb_rule_node *curnode)
 {
 	printk("\n........INPUT PARAMS........\n");
-	printk("src_mac: %pM, dst_mac: %pM, src_port: %d, dst_port: %d\n",
-			curnode->rule.inner.sa, curnode->rule.inner.da, curnode->rule.inner.src_port, curnode->rule.inner.dst_port);
-	printk("dscp: %d, dscp remark: %d, vlan id: %d, vlan pcp: %d, vlan pcp remark: %d, protocol no: %d\n",
-			curnode->rule.inner.dscp, curnode->rule.inner.dscp_remark, curnode->rule.inner.vlan_id, curnode->rule.inner.vlan_pcp, curnode->rule.inner.vlan_pcp_remark, curnode->rule.inner.protocol_number);
+	printk("src_mac: %pM, dst_mac: %pM, src_port: %d, dst_port: %d, ip_version_type: %d\n",
+			curnode->rule.inner.sa, curnode->rule.inner.da, curnode->rule.inner.src_port,
+			curnode->rule.inner.dst_port, curnode->rule.inner.ip_version_type);
+	printk("dscp: %d, dscp remark: %d, vlan id: %d, vlan pcp: %d, vlan pcp remark: %d, protocol number: %d\n",
+			curnode->rule.inner.dscp, curnode->rule.inner.dscp_remark, curnode->rule.inner.vlan_id,
+			curnode->rule.inner.vlan_pcp, curnode->rule.inner.vlan_pcp_remark, curnode->rule.inner.protocol_number);
 
 	printk("src_ipv4: %pI4, dst_ipv4: %pI4\n", &curnode->rule.inner.src_ipv4_addr, &curnode->rule.inner.dst_ipv4_addr);
 
@@ -826,20 +828,20 @@ void sp_mapdb_init(void)
 static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule_input_params *params)
 {
 	bool compare_result;
-	uint32_t flags = rule->inner.flags;
+	uint32_t flags = rule->inner.flags_sawf;
 
-	if (flags & SP_RULE_FLAG_MATCH_SOURCE_MAC) {
-		DEBUG_INFO("Matching SRC..\n");
-		DEBUG_INFO("Input src = %pM\n", params->src.mac);
-		DEBUG_INFO("rule src = %pM\n", rule->inner.sa);
-		compare_result = ether_addr_equal(params->src.mac, rule->inner.sa);
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_IP_VERSION_TYPE) {
+		DEBUG_INFO("Matching IP version type..\n");
+		DEBUG_INFO("Input ip version type = 0x%x\n", params->ip_version_type);
+		DEBUG_INFO("rule ip version type = 0x%x\n", rule->inner.ip_version_type);
+		compare_result = params->ip_version_type == rule->inner.ip_version_type;
 		if (!compare_result) {
-			DEBUG_WARN("SRC match failed!\n");
+			DEBUG_WARN("IP version type match failed!\n");
 			return false;
 		}
 	}
 
-	if (flags & SP_RULE_FLAG_MATCH_DST_MAC) {
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_MAC) {
 		DEBUG_INFO("Matching DST..\n");
 		DEBUG_INFO("Input dst = %pM\n", params->dst.mac);
 		DEBUG_INFO("rule dst = %pM\n", rule->inner.da);
@@ -850,50 +852,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		}
 	}
 
-	if (flags & SP_RULE_FLAG_MATCH_SRC_IPV4) {
-		DEBUG_INFO("Matching SRC IP..\n");
-		DEBUG_INFO("Input src ipv4 =  %pI4", &params->src.ip.ipv4_addr);
-		DEBUG_INFO("rule src ipv4 =  %pI4", &rule->inner.src_ipv4_addr);
-
-		if (flags & SP_RULE_FLAG_MATCH_SRC_IPV4_MASK) {
-			params->src.ip.ipv4_addr &= rule->inner.src_ipv4_addr_mask;
-		}
-
-		compare_result = params->src.ip.ipv4_addr == rule->inner.src_ipv4_addr;
-		if (!compare_result) {
-			DEBUG_WARN("SRC ip match failed!\n");
-			return false;
-		}
-	}
-
-	if (flags & SP_RULE_FLAG_MATCH_DST_IPV4) {
-		DEBUG_INFO("Matching DST IP..\n");
-		DEBUG_INFO("Input dst ipv4 = %pI4", &params->dst.ip.ipv4_addr);
-		DEBUG_INFO("rule dst ipv4 = %pI4", &rule->inner.dst_ipv4_addr);
-
-		if (flags & SP_RULE_FLAG_MATCH_DST_IPV4_MASK) {
-			params->dst.ip.ipv4_addr &= rule->inner.dst_ipv4_addr_mask;
-		}
-
-		compare_result = params->dst.ip.ipv4_addr == rule->inner.dst_ipv4_addr;
-		if (!compare_result) {
-			DEBUG_WARN("DEST ip match failed!\n");
-			return false;
-		}
-	}
-
-	if (flags & SP_RULE_FLAG_MATCH_SRC_PORT) {
-		DEBUG_INFO("Matching SRC PORT..\n");
-		DEBUG_INFO("Input src port = 0x%x\n", params->src.port);
-		DEBUG_INFO("rule srcport = 0x%x\n", rule->inner.src_port);
-		compare_result = params->src.port == rule->inner.src_port;
-		if (!compare_result) {
-			DEBUG_WARN("SRC port match failed!\n");
-			return false;
-		}
-	}
-
-	if (flags & SP_RULE_FLAG_MATCH_DST_PORT) {
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_PORT) {
 		DEBUG_INFO("Matching DST PORT..\n");
 		DEBUG_INFO("Input dst port = 0x%x\n", params->dst.port);
 		DEBUG_INFO("rule dst port = 0x%x\n", rule->inner.dst_port);
@@ -904,7 +863,61 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		}
 	}
 
-	if (flags & SP_RULE_FLAG_MATCH_PROTOCOL) {
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_IPV4) {
+		DEBUG_INFO("Matching DST IP..\n");
+		DEBUG_INFO("Input dst ipv4 = %pI4", &params->dst.ip.ipv4_addr);
+		DEBUG_INFO("rule dst ipv4 = %pI4", &rule->inner.dst_ipv4_addr);
+
+		if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_IPV4_MASK) {
+			params->dst.ip.ipv4_addr &= rule->inner.dst_ipv4_addr_mask;
+		}
+
+		compare_result = params->dst.ip.ipv4_addr == rule->inner.dst_ipv4_addr;
+		if (!compare_result) {
+			DEBUG_WARN("DEST ip match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_SOURCE_MAC) {
+		DEBUG_INFO("Matching SRC..\n");
+		DEBUG_INFO("Input src = %pM\n", params->src.mac);
+		DEBUG_INFO("rule src = %pM\n", rule->inner.sa);
+		compare_result = ether_addr_equal(params->src.mac, rule->inner.sa);
+		if (!compare_result) {
+			DEBUG_WARN("SRC match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_SRC_PORT) {
+		DEBUG_INFO("Matching SRC PORT..\n");
+		DEBUG_INFO("Input src port = 0x%x\n", params->src.port);
+		DEBUG_INFO("rule srcport = 0x%x\n", rule->inner.src_port);
+		compare_result = params->src.port == rule->inner.src_port;
+		if (!compare_result) {
+			DEBUG_WARN("SRC port match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4) {
+		DEBUG_INFO("Matching SRC IP..\n");
+		DEBUG_INFO("Input src ipv4 =  %pI4", &params->src.ip.ipv4_addr);
+		DEBUG_INFO("rule src ipv4 =  %pI4", &rule->inner.src_ipv4_addr);
+
+		if (flags & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4_MASK) {
+			params->src.ip.ipv4_addr &= rule->inner.src_ipv4_addr_mask;
+		}
+
+		compare_result = params->src.ip.ipv4_addr == rule->inner.src_ipv4_addr;
+		if (!compare_result) {
+			DEBUG_WARN("SRC ip match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_PROTOCOL) {
 		DEBUG_INFO("Matching IP Protocol..\n");
 		DEBUG_INFO("Input ip protocol = %u\n", params->protocol);
 		DEBUG_INFO("rule ip protocol = %u\n", rule->inner.protocol_number);
@@ -915,7 +928,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		}
 	}
 
-	if (flags & SP_RULE_FLAG_MATCH_DSCP) {
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_DSCP) {
 		DEBUG_INFO("Matching DSCP..\n");
 		DEBUG_INFO("Input DSCP = %u\n", params->dscp);
 		DEBUG_INFO("rule DSCP = %u\n", rule->inner.dscp);
@@ -926,7 +939,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		}
 	}
 
-	if (flags & SP_RULE_FLAG_MATCH_VLAN_PCP) {
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP) {
 		uint8_t vlan_pcp;
 		if (params->vlan_tci == SP_RULE_INVALID_VLAN_TCI) {
 			DEBUG_WARN("Vlan PCP match failed due to invalid vlan tag!\n");
@@ -945,7 +958,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		}
 	}
 
-	if (flags & SP_RULE_FLAG_MATCH_VLAN_ID) {
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_VLAN_ID) {
 		uint16_t vlan_id;
 		if (params->vlan_tci == SP_RULE_INVALID_VLAN_TCI) {
 			DEBUG_WARN("Vlan ID match failed due to invalid vlan tag!\n");
@@ -1087,31 +1100,37 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 
 	if (info->attrs[SP_GNL_ATTR_SRC_PORT]) {
 		to_sawf_sp.inner.src_port = nla_get_u16(info->attrs[SP_GNL_ATTR_SRC_PORT]);
-		mask |= SP_RULE_FLAG_MATCH_SRC_PORT;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_PORT;
 		DEBUG_INFO("Source port: 0x%x\n", to_sawf_sp.inner.src_port);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_PORT]) {
 		to_sawf_sp.inner.dst_port = nla_get_u16(info->attrs[SP_GNL_ATTR_DST_PORT]);
-		mask |= SP_RULE_FLAG_MATCH_DST_PORT;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_PORT;
 		DEBUG_INFO("Destination port: 0x%x\n", to_sawf_sp.inner.dst_port);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SRC_MAC]) {
 		memcpy(to_sawf_sp.inner.sa, nla_data(info->attrs[SP_GNL_ATTR_SRC_MAC]), ETH_ALEN);
-		mask |= SP_RULE_FLAG_MATCH_SOURCE_MAC;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_SOURCE_MAC;
 		DEBUG_INFO("sa = %pM \n", to_sawf_sp.inner.sa);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_MAC]) {
 		memcpy(to_sawf_sp.inner.da, nla_data(info->attrs[SP_GNL_ATTR_DST_MAC]), ETH_ALEN);
-		mask |= SP_RULE_FLAG_MATCH_DST_MAC;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_MAC;
 		DEBUG_INFO("da = %pM \n", to_sawf_sp.inner.da);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_IP_VERSION_TYPE]) {
+		to_sawf_sp.inner.ip_version_type = nla_get_u8(info->attrs[SP_GNL_ATTR_IP_VERSION_TYPE]);
+		mask |= SP_RULE_FLAG_MATCH_SAWF_IP_VERSION_TYPE;
+		DEBUG_INFO("IP Version type: 0x%x\n", to_sawf_sp.inner.ip_version_type);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR]) {
 		to_sawf_sp.inner.src_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR]);
-		mask |= SP_RULE_FLAG_MATCH_SRC_IPV4;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4;
 		DEBUG_INFO("src_ipv4 = %pI4 \n", &to_sawf_sp.inner.src_ipv4_addr);
 	}
 
@@ -1119,12 +1138,12 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		to_sawf_sp.inner.src_ipv4_addr_mask = nla_get_in_addr(info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR_MASK]);
 		DEBUG_INFO("src_ipv4_mask = %pI4 \n", &to_sawf_sp.inner.src_ipv4_addr_mask);
 		to_sawf_sp.inner.src_ipv4_addr &= to_sawf_sp.inner.src_ipv4_addr_mask;
-		mask |= SP_RULE_FLAG_MATCH_SRC_IPV4_MASK;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]) {
 		to_sawf_sp.inner.dst_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]);
-		mask |= SP_RULE_FLAG_MATCH_DST_IPV4;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV4;
 		DEBUG_INFO("dst_ipv4 = %pI4 \n", &to_sawf_sp.inner.dst_ipv4_addr);
 	}
 
@@ -1132,14 +1151,14 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		to_sawf_sp.inner.dst_ipv4_addr_mask = nla_get_in_addr(info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR_MASK]);
 		DEBUG_INFO("dst_ipv4_mask = %pI4 \n", &to_sawf_sp.inner.dst_ipv4_addr_mask);
 		to_sawf_sp.inner.dst_ipv4_addr &= to_sawf_sp.inner.dst_ipv4_addr_mask;
-		mask |= SP_RULE_FLAG_MATCH_DST_IPV4_MASK;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV4_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR]) {
 		struct in6_addr saddr;
 		saddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR]);
 		memcpy(to_sawf_sp.inner.src_ipv6_addr, saddr.s6_addr32, sizeof(struct in6_addr));
-		mask |= SP_RULE_FLAG_MATCH_SRC_IPV6;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6;
 		DEBUG_INFO("src_ipv6 = %pI6 \n", &to_sawf_sp.inner.src_ipv6_addr);
 	}
 
@@ -1154,14 +1173,14 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		for (i = 0; i < IPV6_ADDR_LEN; i++) {
 			to_sawf_sp.inner.src_ipv6_addr[i] &= to_sawf_sp.inner.src_ipv6_addr_mask[i];
 		}
-		mask |= SP_RULE_FLAG_MATCH_SRC_IPV6_MASK;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]) {
 		struct in6_addr daddr;
 		daddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]);
 		memcpy(to_sawf_sp.inner.dst_ipv6_addr, daddr.s6_addr32, sizeof(struct in6_addr));
-		mask |= SP_RULE_FLAG_MATCH_DST_IPV6;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV6;
 		DEBUG_INFO("dst_ipv6 = %pI6\n", &to_sawf_sp.inner.dst_ipv6_addr);
 	}
 
@@ -1177,42 +1196,42 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 			to_sawf_sp.inner.dst_ipv6_addr[i] &= to_sawf_sp.inner.dst_ipv6_addr_mask[i];
 		}
 
-		mask |= SP_RULE_FLAG_MATCH_DST_IPV6_MASK;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV6_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_PROTOCOL_NUMBER]) {
 		to_sawf_sp.inner.protocol_number = nla_get_u8(info->attrs[SP_GNL_ATTR_PROTOCOL_NUMBER]);
-		mask |= SP_RULE_FLAG_MATCH_PROTOCOL;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_PROTOCOL;
 		DEBUG_INFO("protocol_number: 0x%x\n", to_sawf_sp.inner.protocol_number);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_VLAN_ID]) {
 		to_sawf_sp.inner.vlan_id = nla_get_u16(info->attrs[SP_GNL_ATTR_VLAN_ID]);
-		mask |= SP_RULE_FLAG_MATCH_VLAN_ID;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_VLAN_ID;
 		DEBUG_INFO("vlan_id: 0x%x\n", to_sawf_sp.inner.vlan_id);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DSCP]) {
 		to_sawf_sp.inner.dscp = nla_get_u8(info->attrs[SP_GNL_ATTR_DSCP]);
-		mask |= SP_RULE_FLAG_MATCH_DSCP;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DSCP;
 		DEBUG_INFO("dscp: 0x%x\n", to_sawf_sp.inner.dscp);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DSCP_REMARK]) {
 		to_sawf_sp.inner.dscp_remark = nla_get_u8(info->attrs[SP_GNL_ATTR_DSCP_REMARK]);
-		mask |= SP_RULE_FLAG_MATCH_DSCP_REMARK;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_DSCP_REMARK;
 		DEBUG_INFO("dscp remark: 0x%x\n", to_sawf_sp.inner.dscp_remark);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_VLAN_PCP]) {
 		to_sawf_sp.inner.vlan_pcp = nla_get_u8(info->attrs[SP_GNL_ATTR_VLAN_PCP]);
-		mask |= SP_RULE_FLAG_MATCH_VLAN_PCP;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP;
 		DEBUG_INFO("vlan_pcp: 0x%x\n", to_sawf_sp.inner.vlan_pcp);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_VLAN_PCP_REMARK]) {
 		to_sawf_sp.inner.vlan_pcp_remark = nla_get_u8(info->attrs[SP_GNL_ATTR_VLAN_PCP_REMARK]);
-		mask |= SP_RULE_FLAG_MATCH_VLAN_PCP_REMARK;
+		mask |= SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP_REMARK;
 		DEBUG_INFO("vlan_pcp_remark: 0x%x\n", to_sawf_sp.inner.vlan_pcp_remark);
 	}
 
@@ -1221,7 +1240,7 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	/*
 	 * Update flag mask for valid rules
 	 */
-	to_sawf_sp.inner.flags = mask;
+	to_sawf_sp.inner.flags_sawf = mask;
 
 	/*
 	 * Update classifier_type as SAWF rules
@@ -1328,7 +1347,8 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u8(msg, SP_GNL_ATTR_DSCP_REMARK, rule.inner.dscp_remark) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP, rule.inner.vlan_pcp) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP_REMARK, rule.inner.vlan_pcp_remark) ||
-	    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id)) {
+	    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_IP_VERSION_TYPE, rule.inner.ip_version_type)) {
 		goto put_failure;
 	}
 
@@ -1371,6 +1391,7 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_VLAN_PCP]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_VLAN_PCP_REMARK]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_SERVICE_CLASS_ID]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_IP_VERSION_TYPE]		= { .type = NLA_U8, },
 };
 
 /* Spm generic netlink operations */
