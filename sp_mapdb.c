@@ -836,7 +836,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		DEBUG_INFO("rule ip version type = 0x%x\n", rule->inner.ip_version_type);
 		compare_result = params->ip_version_type == rule->inner.ip_version_type;
 		if (!compare_result) {
-			DEBUG_WARN("IP version type match failed!\n");
+			DEBUG_WARN("IP version match failed!\n");
 			return false;
 		}
 	}
@@ -889,6 +889,44 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 			return false;
 		}
 	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6) {
+                DEBUG_INFO("Matching SRC IPv6..\n");
+                DEBUG_INFO("Input src IPv6 =  %pI6", &params->src.ip.ipv6_addr);
+                DEBUG_INFO("rule src IPv6 =  %pI6", &rule->inner.src_ipv6_addr);
+
+                if (flags & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6_MASK) {
+                        params->src.ip.ipv6_addr[0] &= rule->inner.src_ipv6_addr_mask[0];
+                        params->src.ip.ipv6_addr[1] &= rule->inner.src_ipv6_addr_mask[1];
+                        params->src.ip.ipv6_addr[2] &= rule->inner.src_ipv6_addr_mask[2];
+                        params->src.ip.ipv6_addr[3] &= rule->inner.src_ipv6_addr_mask[3];
+                }
+
+                compare_result = params->src.ip.ipv6_addr == rule->inner.src_ipv6_addr;
+                if (!compare_result) {
+                        DEBUG_WARN("SRC IPv6 match failed!\n");
+                        return false;
+                }
+        }
+
+        if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_IPV6) {
+                DEBUG_INFO("Matching DST IPv6..\n");
+                DEBUG_INFO("Input dst IPv6 = %pI6", &params->dst.ip.ipv6_addr);
+                DEBUG_INFO("rule dst IPv6 = %pI6", &rule->inner.dst_ipv6_addr);
+
+                if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_IPV6_MASK) {
+                        params->dst.ip.ipv6_addr[0] &= rule->inner.dst_ipv6_addr_mask[0];
+                        params->dst.ip.ipv6_addr[1] &= rule->inner.dst_ipv6_addr_mask[1];
+                        params->dst.ip.ipv6_addr[2] &= rule->inner.dst_ipv6_addr_mask[2];
+                        params->dst.ip.ipv6_addr[3] &= rule->inner.dst_ipv6_addr_mask[3];
+                }
+
+                compare_result = params->dst.ip.ipv6_addr == rule->inner.dst_ipv6_addr;
+                if (!compare_result) {
+                        DEBUG_WARN("DEST IPv6 match failed!\n");
+                        return false;
+                }
+        }
 
 	if (flags & SP_RULE_FLAG_MATCH_SAWF_SRC_PORT) {
 		DEBUG_INFO("Matching SRC PORT..\n");
@@ -1036,6 +1074,52 @@ set_output:
 	rule_output->vlan_pcp_remark = vlan_pcp_remark;
 }
 EXPORT_SYMBOL(sp_mapdb_rule_apply_sawf);
+
+/*
+ * sp_mapdb_apply_scs()
+ * 	Assign the user priority value into skb->priority on rule match.
+ */
+void sp_mapdb_apply_scs(struct sk_buff *skb, struct sp_rule_input_params *params, struct sp_rule_output_params *output)
+{
+	int i;
+	struct sp_mapdb_rule_node *curnode;
+	uint8_t priority = SP_RULE_INVALID_PRIORITY;
+	uint32_t rule_id = SP_RULE_INVALID_RULE_ID;
+	rcu_read_lock();
+	if (rule_manager.rule_count == 0) {
+		rcu_read_unlock();
+		DEBUG_WARN("rule table is empty\n");
+		/*
+		 * Rule table is empty.
+		 */
+		goto set_output;
+	}
+
+	rcu_read_unlock();
+
+	/*
+	 * The iteration loop goes backward because
+	 * rules should be matched in the precedence
+	 * descending order.
+	 */
+	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
+		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
+			DEBUG_INFO("Matching with rule id = %d (scs case)\n", curnode->rule.id);
+			if (curnode->rule.classifier_type == SP_RULE_TYPE_SCS) {
+				if (sp_mapdb_rule_match_sawf(&curnode->rule, params)) {
+					priority = curnode->rule.inner.rule_output;
+					rule_id = curnode->rule.id;
+					goto set_output;
+				}
+			}
+		}
+	}
+
+set_output:
+	output->rule_id = rule_id;
+	output->priority = priority;
+}
+EXPORT_SYMBOL(sp_mapdb_apply_scs);
 
 /*
  * sp_mapdb_rule_receive()
@@ -1235,17 +1319,21 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		DEBUG_INFO("vlan_pcp_remark: 0x%x\n", to_sawf_sp.inner.vlan_pcp_remark);
 	}
 
+	/*
+	 * Default classifier is SAWF, but if SCS rule is received, then classifier type will be
+	 * overwritten by SCS.
+	 */
+	to_sawf_sp.classifier_type = SP_RULE_TYPE_SAWF;
+	if (info->attrs[SP_GNL_ATTR_CLASSIFIER_TYPE]) {
+		to_sawf_sp.classifier_type = nla_get_u8(info->attrs[SP_GNL_ATTR_CLASSIFIER_TYPE]);
+	}
+
 	rcu_read_unlock();
 
 	/*
 	 * Update flag mask for valid rules
 	 */
 	to_sawf_sp.inner.flags_sawf = mask;
-
-	/*
-	 * Update classifier_type as SAWF rules
-	 */
-	to_sawf_sp.classifier_type = SP_RULE_TYPE_SAWF;
 
 	/*
 	 * Update rules in database
@@ -1309,6 +1397,7 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	if (nla_put_u32(msg, SP_GNL_ATTR_ID, rule.id) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_RULE_PRECEDENCE, rule.rule_precedence) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_RULE_OUTPUT, rule.inner.rule_output) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_CLASSIFIER_TYPE, rule.classifier_type) ||
 	    nla_put(msg, SP_GNL_ATTR_SRC_MAC, ETH_ALEN, rule.inner.sa) ||
 	    nla_put(msg, SP_GNL_ATTR_DST_MAC, ETH_ALEN, rule.inner.da)) {
 		goto put_failure;
@@ -1392,6 +1481,7 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_VLAN_PCP_REMARK]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_SERVICE_CLASS_ID]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_IP_VERSION_TYPE]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_CLASSIFIER_TYPE]		= { .type = NLA_U8, },
 };
 
 /* Spm generic netlink operations */

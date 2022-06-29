@@ -82,6 +82,7 @@
 #define	SP_RULE_INVALID_VLAN_PCP_REMARK		0xFF		/* Invalid vlan PCP remark */
 #define	SP_RULE_INVALID_RULE_ID			0xFFFF		/* Invalid Rule ID */
 #define	SP_RULE_INVALID_VLAN_TCI		0xFFFF		/* Invalid vlan tci */
+#define	SP_RULE_INVALID_PRIORITY		0xFF		/* Invalid Priority value */
 
 /*
  * sp_mapdb_update_results
@@ -256,7 +257,7 @@ struct sp_rule_inner {
 	uint32_t dst_ipv6_addr_mask[IPV6_ADDR_LEN];
 
 	/*
-	 * IP Version type
+	 * IP version type
 	 */
 	uint8_t ip_version_type;
 };
@@ -268,6 +269,7 @@ struct sp_rule_inner {
 enum sp_rule_classifier_type {
 	SP_RULE_TYPE_MESH,	/* For non-sawf rule */
 	SP_RULE_TYPE_SAWF,	/* For SAWF rule */
+	SP_RULE_TYPE_SCS,	/* For SCS rule */
 };
 
 /*
@@ -279,7 +281,7 @@ struct sp_rule {
 	sp_mapdb_add_remove_filter_type_t cmd;			/* Command type. 1 means add 0 means delete. */
 	struct sp_rule_inner inner;				/* Inner structure */
 	uint8_t rule_precedence;				/* Rule precedence – higher number means higher priority. */
-	uint8_t classifier_type;				/* rule_type:0 for Emesh case, and 1 for SAWF */
+	uint8_t classifier_type;				/* rule_type:0 for Emesh case, 1 for SAWF, 2 for SCS */
 };
 
 /*
@@ -317,7 +319,7 @@ struct sp_rule_output_params {
 	uint8_t priority;		/* Priority */
 	uint8_t dscp_remark;		/* DSCP remark */
 	uint8_t vlan_pcp_remark;	/* Vlan PCP remark */
-	uint16_t rule_id;		/* Rule ID */
+	uint32_t rule_id;		/* Rule ID */
 };
 
 sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule);
@@ -328,5 +330,7 @@ int sp_mapdb_rule_update_register_notify(void (*sp_mapdb_rule_update_callback)(u
 void sp_mapdb_rule_update_unregister_notify(void);
 void sp_mapdb_ruletable_flush(void);
 void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *params,
+			      struct sp_rule_output_params *rule_output);
+void sp_mapdb_apply_scs(struct sk_buff *skb, struct sp_rule_input_params *params,
 			      struct sp_rule_output_params *rule_output);
 #endif
