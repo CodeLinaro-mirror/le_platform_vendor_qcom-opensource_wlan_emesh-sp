@@ -726,6 +726,7 @@ static inline void sp_mapdb_rule_print_input_params(struct sp_mapdb_rule_node *c
 	printk("src_ipv4_mask: %pI4, dst_ipv4_mask: %pI4\n", &curnode->rule.inner.src_ipv4_addr_mask, &curnode->rule.inner.dst_ipv4_addr_mask);
 
 	printk("src_ipv6_mask: %pI6: dst_ipv6_mask: %pI6\n", &curnode->rule.inner.src_ipv6_addr_mask, &curnode->rule.inner.dst_ipv6_addr_mask);
+	printk("match pattern value: %x: match pattern mask: %x\n", curnode->rule.inner.match_pattern_value, curnode->rule.inner.match_pattern_mask);
 }
 
 /*
@@ -1010,6 +1011,18 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		compare_result = vlan_id == rule->inner.vlan_id;
 		if (!compare_result) {
 			DEBUG_WARN("Vlan ID match failed!\n");
+			return false;
+		}
+	}
+
+	if (flags & SP_RULE_FLAG_MATCH_SCS_SPI) {
+		DEBUG_INFO("Matching SPI..\n");
+		DEBUG_INFO("Input SPI = %u\n", params->spi);
+		DEBUG_INFO("rule match pattern value = %x, match pattern mask = %x\n", rule->inner.match_pattern_value, rule->inner.match_pattern_mask);
+		params->spi &= rule->inner.match_pattern_mask;
+		compare_result = params->spi == rule->inner.match_pattern_value;
+		if (!compare_result) {
+			DEBUG_WARN("SPI match failed!\n");
 			return false;
 		}
 	}
@@ -1319,6 +1332,16 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		DEBUG_INFO("vlan_pcp_remark: 0x%x\n", to_sawf_sp.inner.vlan_pcp_remark);
 	}
 
+	if (info->attrs[SP_GNL_ATTR_MATCH_PATTERN_VALUE]) {
+		mask |= SP_RULE_FLAG_MATCH_SCS_SPI;
+		to_sawf_sp.inner.match_pattern_value = nla_get_u32(info->attrs[SP_GNL_ATTR_MATCH_PATTERN_VALUE]);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_MATCH_PATTERN_MASK]) {
+		mask |= SP_RULE_FLAG_MATCH_SCS_SPI;
+		to_sawf_sp.inner.match_pattern_mask = nla_get_u32(info->attrs[SP_GNL_ATTR_MATCH_PATTERN_MASK]);
+	}
+
 	/*
 	 * Default classifier is SAWF, but if SCS rule is received, then classifier type will be
 	 * overwritten by SCS.
@@ -1437,7 +1460,9 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP, rule.inner.vlan_pcp) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP_REMARK, rule.inner.vlan_pcp_remark) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id) ||
-	    nla_put_u8(msg, SP_GNL_ATTR_IP_VERSION_TYPE, rule.inner.ip_version_type)) {
+	    nla_put_u8(msg, SP_GNL_ATTR_IP_VERSION_TYPE, rule.inner.ip_version_type) ||
+	    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_VALUE, rule.inner.match_pattern_value) ||
+	    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_MASK, rule.inner.match_pattern_mask)) {
 		goto put_failure;
 	}
 
@@ -1482,6 +1507,8 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_SERVICE_CLASS_ID]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_IP_VERSION_TYPE]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_CLASSIFIER_TYPE]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_MATCH_PATTERN_VALUE]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_MATCH_PATTERN_MASK]		= { .type = NLA_U32, },
 };
 
 /* Spm generic netlink operations */

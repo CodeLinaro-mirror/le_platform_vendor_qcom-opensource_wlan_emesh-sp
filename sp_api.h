@@ -75,6 +75,12 @@
 #define	SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP_REMARK		0x20000		/* Sawf Vlan priority remark mask */
 #define	SP_RULE_FLAG_MATCH_SAWF_IP_VERSION_TYPE		0x40000		/* Sawf IP version type match mask */
 
+/*
+ * sp_rule_match_flag_sawf
+ * 	Rule match mask for SAWF
+ */
+#define	SP_RULE_FLAG_MATCH_SCS_SPI			0x80000		/* SCS SPI match mask*/
+
 #define IPV6_ADDR_LEN		4
 
 #define	SP_RULE_INVALID_SERVICE_CLASS_ID	0xFF		/* Invalid Service class ID */
@@ -257,6 +263,16 @@ struct sp_rule_inner {
 	uint32_t dst_ipv6_addr_mask[IPV6_ADDR_LEN];
 
 	/*
+	 * Match pattern supported for SCS classifier (SPI is supported)
+	 */
+	uint32_t match_pattern_value;
+
+	/*
+	 * Match pattern mask supported for SCS classifier (SPI is supported)
+	 */
+	uint32_t match_pattern_mask;
+
+	/*
 	 * IP version type
 	 */
 	uint8_t ip_version_type;
@@ -304,6 +320,7 @@ struct sp_3tuple_info {
 struct sp_rule_input_params {
 	struct sp_3tuple_info src;		/* Source 3 tuple parameters */
 	struct sp_3tuple_info dst;		/* Destination 3 tuple parameters */
+	uint32_t spi;				/* SPI for ipsec packet */
 	uint16_t protocol;			/* Protocol number */
 	uint8_t dscp;				/* DSCP value */
 	uint8_t ip_version_type;		/* IP Version type */
