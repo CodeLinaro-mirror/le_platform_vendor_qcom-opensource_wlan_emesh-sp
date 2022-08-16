@@ -903,8 +903,8 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
                         params->src.ip.ipv6_addr[3] &= rule->inner.src_ipv6_addr_mask[3];
                 }
 
-                compare_result = params->src.ip.ipv6_addr == rule->inner.src_ipv6_addr;
-                if (!compare_result) {
+                compare_result = memcmp(params->src.ip.ipv6_addr, rule->inner.src_ipv6_addr, sizeof(uint32_t) * 4);
+                if (compare_result) {
                         DEBUG_WARN("SRC IPv6 match failed!\n");
                         return false;
                 }
@@ -922,8 +922,8 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
                         params->dst.ip.ipv6_addr[3] &= rule->inner.dst_ipv6_addr_mask[3];
                 }
 
-                compare_result = params->dst.ip.ipv6_addr == rule->inner.dst_ipv6_addr;
-                if (!compare_result) {
+                compare_result = memcmp(params->dst.ip.ipv6_addr, rule->inner.dst_ipv6_addr, sizeof(uint32_t) * 4);
+                if (compare_result) {
                         DEBUG_WARN("DEST IPv6 match failed!\n");
                         return false;
                 }
