@@ -701,6 +701,7 @@ static inline void sp_mapdb_rule_print_input_params(struct sp_mapdb_rule_node *c
 
 	printk("src_ipv6_mask: %pI6: dst_ipv6_mask: %pI6\n", &curnode->rule.inner.src_ipv6_addr_mask, &curnode->rule.inner.dst_ipv6_addr_mask);
 	printk("match pattern value: %x: match pattern mask: %x\n", curnode->rule.inner.match_pattern_value, curnode->rule.inner.match_pattern_mask);
+	printk("MSCS TID BITMAP: %x: Priority Limit Value: %x\n", curnode->rule.inner.mscs_tid_bitmap, curnode->rule.inner.priority_limit);
 }
 
 /*
@@ -722,6 +723,7 @@ void sp_mapdb_ruletable_print(void)
 				printk("\n........OUTPUT PARAMS........\n");
 				printk("dscp_remark: %d, vlan_pcp_remark: %d\n", curnode->rule.inner.dscp_remark, curnode->rule.inner.vlan_pcp_remark);
 				printk("output(priority): %d, service_class_id: %d\n", curnode->rule.inner.rule_output, curnode->rule.inner.service_class_id);
+				printk("MSCS TID BITMAP: %x: Priority Limit Value: %x\n", curnode->rule.inner.mscs_tid_bitmap, curnode->rule.inner.priority_limit);
 			}
 		}
 	}
@@ -1081,7 +1083,6 @@ void sp_mapdb_apply_scs(struct sk_buff *skb, struct sp_rule_input_params *params
 		 */
 		goto set_output;
 	}
-
 	rcu_read_unlock();
 
 	/*
@@ -1109,6 +1110,61 @@ set_output:
 EXPORT_SYMBOL(sp_mapdb_apply_scs);
 
 /*
+ * sp_mapdb_apply_mscs()
+ *      Assign the user priority value into skb->priority on rule match.
+ */
+void sp_mapdb_apply_mscs(struct sk_buff *skb, struct sp_rule_input_params *params, struct sp_rule_output_params *output)
+{
+	int i;
+	struct sp_mapdb_rule_node *curnode;
+	uint8_t priority = SP_RULE_INVALID_PRIORITY;
+	uint8_t mscs_tid_bitmap = SP_RULE_INVALID_MSCS_TID_BITMAP;
+	uint32_t rule_id = SP_RULE_INVALID_RULE_ID;
+	rcu_read_lock();
+	if (rule_manager.rule_count == 0) {
+		rcu_read_unlock();
+		DEBUG_WARN("rule table is empty\n");
+		/*
+		 * Rule table is empty.
+		 */
+		goto set_output;
+	}
+
+	rcu_read_unlock();
+
+	/*
+	 * The iteration loop goes backward because
+	 * rules should be matched in the precedence
+	 * descending order.
+	 */
+	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
+		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
+			DEBUG_INFO("Matching with rule id = %d (mscs case)\n", curnode->rule.id);
+			if (curnode->rule.classifier_type == SP_RULE_TYPE_MSCS) {
+				if (sp_mapdb_rule_match_sawf(&curnode->rule, params)) {
+					mscs_tid_bitmap = curnode->rule.inner.mscs_tid_bitmap;
+					/*
+					 * Check the priority of the tid bit map received from rule.
+					 */
+					if (mscs_tid_bitmap != SP_RULE_INVALID_MSCS_TID_BITMAP) {
+						if ((1 << skb->priority) & mscs_tid_bitmap) {
+							priority = skb->priority;
+							rule_id = curnode->rule.id;
+							goto set_output;
+						}
+					}
+				}
+			}
+		}
+	}
+
+set_output:
+	output->rule_id = rule_id;
+	output->priority = priority;
+}
+EXPORT_SYMBOL(sp_mapdb_apply_mscs);
+
+/*
  * sp_mapdb_rule_receive()
  * 	Handles a netlink message from userspace for rule add/delete/update
  */
@@ -1126,6 +1182,7 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	to_sawf_sp.inner.service_class_id = SP_RULE_INVALID_SERVICE_CLASS_ID;
 	to_sawf_sp.inner.dscp_remark = SP_RULE_INVALID_DSCP_REMARK;
 	to_sawf_sp.inner.vlan_pcp_remark = SP_RULE_INVALID_VLAN_PCP_REMARK;
+	to_sawf_sp.inner.mscs_tid_bitmap = SP_RULE_INVALID_MSCS_TID_BITMAP;
 
 	rcu_read_lock();
 	DEBUG_INFO("Recieved rule...\n");
@@ -1316,6 +1373,16 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		to_sawf_sp.inner.match_pattern_mask = nla_get_u32(info->attrs[SP_GNL_ATTR_MATCH_PATTERN_MASK]);
 	}
 
+	if (info->attrs[SP_GNL_ATTR_TID_BITMAP]) {
+		to_sawf_sp.inner.mscs_tid_bitmap = nla_get_u8(info->attrs[SP_GNL_ATTR_TID_BITMAP]);
+		DEBUG_INFO("MSCS priority bitmap: 0x%x\n", to_sawf_sp.inner.mscs_tid_bitmap);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_PRIORITY_LIMIT]) {
+		to_sawf_sp.inner.priority_limit = nla_get_u8(info->attrs[SP_GNL_ATTR_PRIORITY_LIMIT]);
+		DEBUG_INFO("Priority limit: 0x%x\n", to_sawf_sp.inner.priority_limit);
+	}
+
 	/*
 	 * Default classifier is SAWF, but if SCS rule is received, then classifier type will be
 	 * overwritten by SCS.
@@ -1436,7 +1503,9 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_IP_VERSION_TYPE, rule.inner.ip_version_type) ||
 	    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_VALUE, rule.inner.match_pattern_value) ||
-	    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_MASK, rule.inner.match_pattern_mask)) {
+	    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_MASK, rule.inner.match_pattern_mask) ||
+	    nla_put_u8(msg, SP_RULE_FLAG_MATCH_MSCS_TID_BITMAP, rule.inner.mscs_tid_bitmap) ||
+	    nla_put_u8(msg,  SP_RULE_FLAG_MATCH_PRIORITY_LIMIT, rule.inner.priority_limit)) {
 		goto put_failure;
 	}
 
@@ -1483,6 +1552,8 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_CLASSIFIER_TYPE]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_MATCH_PATTERN_VALUE]		= { .type = NLA_U32, },
 	[SP_GNL_ATTR_MATCH_PATTERN_MASK]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_TID_BITMAP]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_PRIORITY_LIMIT]		= { .type = NLA_U8, },
 };
 
 /* Spm generic netlink operations */

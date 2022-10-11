@@ -80,6 +80,8 @@
  * 	Rule match mask for SAWF
  */
 #define	SP_RULE_FLAG_MATCH_SCS_SPI			0x80000		/* SCS SPI match mask*/
+#define SP_RULE_FLAG_MATCH_MSCS_TID_BITMAP		0x100000	/* MSCS Bitmap match*/
+#define SP_RULE_FLAG_MATCH_PRIORITY_LIMIT		0x200000	/* Priority Limit value*/
 
 #define IPV6_ADDR_LEN		4
 
@@ -89,6 +91,7 @@
 #define	SP_RULE_INVALID_RULE_ID			0xFFFF		/* Invalid Rule ID */
 #define	SP_RULE_INVALID_VLAN_TCI		0xFFFF		/* Invalid vlan tci */
 #define	SP_RULE_INVALID_PRIORITY		0xFF		/* Invalid Priority value */
+#define SP_RULE_INVALID_MSCS_TID_BITMAP		0x00		/* Invalid MSCS Bitmap */
 
 /*
  * sp_mapdb_update_results
@@ -276,6 +279,16 @@ struct sp_rule_inner {
 	 * IP version type
 	 */
 	uint8_t ip_version_type;
+
+	/*
+	 * MSCS tid  Bitmap
+	 */
+	uint8_t mscs_tid_bitmap;
+
+	/*
+	 * Priority limit range
+	 */
+	uint8_t priority_limit;
 };
 
 /*
@@ -286,6 +299,7 @@ enum sp_rule_classifier_type {
 	SP_RULE_TYPE_MESH,	/* For non-sawf rule */
 	SP_RULE_TYPE_SAWF,	/* For SAWF rule */
 	SP_RULE_TYPE_SCS,	/* For SCS rule */
+	SP_RULE_TYPE_MSCS,	/* For MSCS rule */
 };
 
 /*
@@ -350,4 +364,6 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 			      struct sp_rule_output_params *rule_output);
 void sp_mapdb_apply_scs(struct sk_buff *skb, struct sp_rule_input_params *params,
 			      struct sp_rule_output_params *rule_output);
+void sp_mapdb_apply_mscs(struct sk_buff *skb, struct sp_rule_input_params *params,
+			      struct sp_rule_output_params *output);
 #endif
