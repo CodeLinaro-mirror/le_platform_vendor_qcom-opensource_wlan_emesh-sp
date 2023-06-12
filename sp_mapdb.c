@@ -581,6 +581,33 @@ set_output:
 }
 
 /*
+ * sp_mapdb_enum_to_char_ae_type()
+ * 	Convert ae type enum to string ae type.
+ */
+static const char* sp_mapdb_enum_to_char_ae_type(enum sp_rule_ae_type ae_type)
+{
+	switch (ae_type) {
+	case SP_RULE_AE_TYPE_DEFAULT:
+		return "default";
+
+	case SP_RULE_AE_TYPE_PPE:
+		return "ppe";
+
+	case SP_RULE_AE_TYPE_SFE:
+		return "sfe";
+
+	case SP_RULE_AE_TYPE_PPE_DS:
+		return "ppe-ds";
+
+	case SP_RULE_AE_TYPE_PPE_VP:
+		return "ppe-vp";
+
+	default:
+		return "none";
+	}
+}
+
+/*
  * sp_mapdb_ruletable_flush()
  * 	Clear the rule table and frees the memory allocated for the rules.
  *
@@ -725,6 +752,7 @@ void sp_mapdb_ruletable_print(void)
 				printk("dscp_remark: %d, vlan_pcp_remark: %d\n", curnode->rule.inner.dscp_remark, curnode->rule.inner.vlan_pcp_remark);
 				printk("output(priority): %d, service_class_id: %d\n", curnode->rule.inner.rule_output, curnode->rule.inner.service_class_id);
 				printk("MSCS TID BITMAP: %x: Priority Limit Value: %x\n", curnode->rule.inner.mscs_tid_bitmap, curnode->rule.inner.priority_limit);
+				printk("acceleration engine type: %s\n", sp_mapdb_enum_to_char_ae_type(curnode->rule.inner.ae_type));
 			}
 		}
 	}
@@ -1065,6 +1093,7 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 	uint8_t output = SP_MAPDB_USE_DSCP;
 	uint32_t rule_id = SP_RULE_INVALID_RULE_ID;
 	uint8_t sawf_rule_type = SAWF_RULE_TYPE_MAX;
+	enum sp_rule_ae_type ae_type = SP_RULE_AE_TYPE_NONE;
 
 	rcu_read_lock();
 	if (rule_manager.rule_count == 0) {
@@ -1096,6 +1125,7 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 					service_class_id = curnode->rule.inner.service_class_id;
 					rule_id = curnode->rule.id;
 					sawf_rule_type = SAWF_RULE_TYPE_DEFAULT;
+					ae_type = curnode->rule.inner.ae_type;
 					goto set_output;
 				}
 			}
@@ -1128,6 +1158,7 @@ set_output:
 	rule_output->dscp_remark = dscp_remark;
 	rule_output->vlan_pcp_remark = vlan_pcp_remark;
 	rule_output->sawf_rule_type = sawf_rule_type;
+	rule_output->ae_type = ae_type;
 }
 EXPORT_SYMBOL(sp_mapdb_rule_apply_sawf);
 
@@ -1531,6 +1562,10 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		DEBUG_INFO("Destination port range end: 0x%x\n", to_sawf_sp.inner.dst_port_range_end);
 	}
 
+	if (info->attrs[SP_GNL_ATTR_AE_TYPE]) {
+		to_sawf_sp.inner.ae_type = nla_get_u8(info->attrs[SP_GNL_ATTR_AE_TYPE]);
+		DEBUG_INFO("Ae type: 0x%x\n", to_sawf_sp.inner.ae_type);
+	}
 
 	/*
 	 * Default classifier is SAWF, but if SCS rule is received, then classifier type will be
@@ -1666,7 +1701,8 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u16(msg, SP_GNL_ATTR_SRC_PORT_RANGE_START, rule.inner.src_port_range_start) ||
 	    nla_put_u16(msg, SP_GNL_ATTR_SRC_PORT_RANGE_END, rule.inner.src_port_range_end) ||
 	    nla_put_u16(msg, SP_GNL_ATTR_DST_PORT_RANGE_START, rule.inner.dst_port_range_start) ||
-	    nla_put_u16(msg, SP_GNL_ATTR_DST_PORT_RANGE_END, rule.inner.dst_port_range_end)) {
+	    nla_put_u16(msg, SP_GNL_ATTR_DST_PORT_RANGE_END, rule.inner.dst_port_range_end) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_AE_TYPE, rule.inner.ae_type)) {
 		goto put_failure;
 	}
 
@@ -1789,6 +1825,7 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_SRC_PORT_RANGE_END]	= { .type = NLA_U16, },
 	[SP_GNL_ATTR_DST_PORT_RANGE_START]	= { .type = NLA_U16, },
 	[SP_GNL_ATTR_DST_PORT_RANGE_END]	= { .type = NLA_U16, },
+	[SP_GNL_ATTR_AE_TYPE]		= { .type = NLA_U8, },
 };
 
 /* Spm generic netlink operations */

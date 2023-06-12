@@ -142,6 +142,19 @@ enum sp_mapdb_add_remove_filter_types {
 };
 typedef enum sp_mapdb_add_remove_filter_types sp_mapdb_add_remove_filter_type_t;
 
+/*
+ * sp_rule_ae_type
+ *	This enum defines different Ae types.
+ */
+enum sp_rule_ae_type {
+	SP_RULE_AE_TYPE_DEFAULT,			/* ae type default. */
+	SP_RULE_AE_TYPE_PPE,				/* ae type ppe. */
+	SP_RULE_AE_TYPE_SFE,				/* ae type sfe. */
+	SP_RULE_AE_TYPE_PPE_DS,				/* ae type ppe-ds. */
+	SP_RULE_AE_TYPE_PPE_VP,				/* ae type ppe-vp. */
+	SP_RULE_AE_TYPE_NONE,				/* no ae type. */
+};
+
 struct sp_rule_inner {
 
 	/*
@@ -319,6 +332,11 @@ struct sp_rule_inner {
 	 * Destination port range end
 	 */
 	uint16_t dst_port_range_end;
+
+	/*
+	 * Acceleration engine type
+	 */
+	enum sp_rule_ae_type ae_type;
 };
 
 /*
@@ -395,6 +413,7 @@ struct sp_rule_output_params {
 	uint8_t vlan_pcp_remark;	/* Vlan PCP remark */
 	uint32_t rule_id;		/* Rule ID */
 	uint8_t sawf_rule_type;		/* rule based flag*/
+	enum sp_rule_ae_type ae_type;	/* acceleration engine mode */
 };
 
 sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule);
