@@ -587,9 +587,6 @@ set_output:
 static const char* sp_mapdb_enum_to_char_ae_type(enum sp_rule_ae_type ae_type)
 {
 	switch (ae_type) {
-	case SP_RULE_AE_TYPE_DEFAULT:
-		return "default";
-
 	case SP_RULE_AE_TYPE_PPE:
 		return "ppe";
 
@@ -602,8 +599,11 @@ static const char* sp_mapdb_enum_to_char_ae_type(enum sp_rule_ae_type ae_type)
 	case SP_RULE_AE_TYPE_PPE_VP:
 		return "ppe-vp";
 
-	default:
+	case SP_RULE_AE_TYPE_NONE:
 		return "none";
+
+	default:
+		return "default";
 	}
 }
 
@@ -1092,8 +1092,8 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 	uint8_t service_class_id = SP_RULE_INVALID_SERVICE_CLASS_ID;
 	uint8_t output = SP_MAPDB_USE_DSCP;
 	uint32_t rule_id = SP_RULE_INVALID_RULE_ID;
-	enum sp_rule_ae_type ae_type = SP_RULE_AE_TYPE_NONE;
 	uint8_t sawf_rule_type = SP_SAWF_RULE_TYPE_INVALID;
+	enum sp_rule_ae_type ae_type = SP_RULE_AE_TYPE_DEFAULT;
 
 	rcu_read_lock();
 	if (rule_manager.rule_count == 0) {
