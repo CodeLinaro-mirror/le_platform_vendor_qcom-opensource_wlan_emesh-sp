@@ -20,6 +20,7 @@
 #include <linux/netfilter.h>
 #include <linux/etherdevice.h>
 #include <linux/if_vlan.h>
+#include <linux/version.h>
 #include <net/genetlink.h>
 #include <linux/notifier.h>
 
@@ -1854,6 +1855,9 @@ static const struct genl_ops sp_genl_ops[] = {
 static struct genl_family sp_genl_family = {
 	.name           = "spm",
 	.version        = 0,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
+	.resv_start_op	= SPM_CMD_MAX,
+#endif
 	.hdrsize        = 0,
 	.maxattr        = SP_GNL_MAX,
 	.policy 	= sp_genl_policy,
