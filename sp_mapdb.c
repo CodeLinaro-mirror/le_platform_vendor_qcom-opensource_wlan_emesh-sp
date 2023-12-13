@@ -110,21 +110,28 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 		if (!compare_result) {
 
 			/*
-			 * If the rule is sawf-scs type, then we further check for
-			 * mac address of the netdevice interfaces.
+			 * If the rule is neither sawf-scs nor legacy scs type, then return false
 			 */
-			if (rule->classifier_type == SP_RULE_TYPE_SAWF_SCS) {
-				compare_result = ether_addr_equal(params->dev_addr, rule->inner.da) &&
-							(params->dst_ifindex == rule->inner.dst_ifindex);
-				if (!compare_result) {
-					DEBUG_WARN("Netdev address and device ID match failed!\n");
-					return false;
-				}
-			} else {
-				DEBUG_WARN("DST mac address match failed!\n");
+			if (rule->classifier_type != SP_RULE_TYPE_SAWF_SCS &&
+					rule->classifier_type != SP_RULE_TYPE_SCS) {
+				DEBUG_WARN("DST mac address match failed for non-SAWF_SCS ans non-SCS case!\n");
 				return false;
 			}
-		}
+
+			/*
+			 * If the rule is sawf-scs or legacy scs type, then we further check for
+			 * mac address of the netdevice interfaces.
+			 */                  
+			if (flags & SP_RULE_FLAG_MATCH_DST_IFINDEX) {
+				compare_result = ether_addr_equal(params->dev_addr, rule->inner.da) &&
+					(params->dst_ifindex == rule->inner.dst_ifindex);
+			}
+
+			if (!compare_result) {
+				DEBUG_WARN("Netdev address and device ID match failed!\n");
+				return false;
+			}
+		} 
 	}
 
 	if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_PORT) {
@@ -1295,11 +1302,12 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 		}
 	}
 
-	/* Traverse for SAWF-SCS rule type */
+	/* Traverse for Legacy SCS rule type */
 	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
 		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
-			DEBUG_INFO("Matching with rule id = %d (sawf-scs case)\n", curnode->rule.id);
-			if (curnode->rule.classifier_type == SP_RULE_TYPE_SAWF_SCS) {
+			DEBUG_INFO("Matching with rule id = %d (legacy scs case)\n", curnode->rule.id);
+			if (curnode->rule.classifier_type == SP_RULE_TYPE_SAWF_SCS ||
+					curnode->rule.classifier_type == SP_RULE_TYPE_SCS) {
 				if (sp_mapdb_rule_match_sawf(&curnode->rule, params)) {
 					output = curnode->rule.inner.rule_output;
 					dscp_remark = curnode->rule.inner.dscp_remark;
@@ -1701,6 +1709,7 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_IFINDEX]) {
+		mask_sawf |= SP_RULE_FLAG_MATCH_DST_IFINDEX;
 		to_sawf_sp.inner.dst_ifindex = nla_get_u8(info->attrs[SP_GNL_ATTR_DST_IFINDEX]);
 		DEBUG_INFO("Destination Interface Index: 0x%x\n", to_sawf_sp.inner.dst_ifindex);
 	}
