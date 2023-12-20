@@ -1329,7 +1329,8 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 {
 	struct sp_rule to_sawf_sp = {0};
 	int rule_cmd;
-	uint32_t mask = 0;
+	uint32_t mask_sawf = 0;
+	uint32_t mask_mesh = 0;
 	sp_mapdb_update_result_t err;
 	int rule_result;
 	void *hdr = NULL;
@@ -1383,6 +1384,7 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	if (info->attrs[SP_GNL_ATTR_USER_PRIORITY]) {
 		to_sawf_sp.inner.user_priority = nla_get_u8(info->attrs[SP_GNL_ATTR_USER_PRIORITY]);
 		DEBUG_INFO("User priority: 0x%x\n", to_sawf_sp.inner.user_priority);
+		mask_mesh |= SP_RULE_FLAG_MATCH_UP;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SERVICE_CLASS_ID]) {
@@ -1392,37 +1394,42 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 
 	if (info->attrs[SP_GNL_ATTR_SRC_PORT]) {
 		to_sawf_sp.inner.src_port = nla_get_u16(info->attrs[SP_GNL_ATTR_SRC_PORT]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_PORT;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_PORT;
+		mask_mesh |= SP_RULE_FLAG_MATCH_SRC_PORT;
 		DEBUG_INFO("Source port: 0x%x\n", to_sawf_sp.inner.src_port);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_PORT]) {
 		to_sawf_sp.inner.dst_port = nla_get_u16(info->attrs[SP_GNL_ATTR_DST_PORT]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_PORT;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_PORT;
+		mask_mesh |= SP_RULE_FLAG_MATCH_DST_PORT;
 		DEBUG_INFO("Destination port: 0x%x\n", to_sawf_sp.inner.dst_port);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SRC_MAC]) {
 		memcpy(to_sawf_sp.inner.sa, nla_data(info->attrs[SP_GNL_ATTR_SRC_MAC]), ETH_ALEN);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SOURCE_MAC;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SOURCE_MAC;
+		mask_mesh |= SP_RULE_FLAG_MATCH_SOURCE_MAC;
 		DEBUG_INFO("sa = %pM \n", to_sawf_sp.inner.sa);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_MAC]) {
 		memcpy(to_sawf_sp.inner.da, nla_data(info->attrs[SP_GNL_ATTR_DST_MAC]), ETH_ALEN);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_MAC;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_MAC;
+		mask_mesh |= SP_RULE_FLAG_MATCH_DST_MAC;
 		DEBUG_INFO("da = %pM \n", to_sawf_sp.inner.da);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_IP_VERSION_TYPE]) {
 		to_sawf_sp.inner.ip_version_type = nla_get_u8(info->attrs[SP_GNL_ATTR_IP_VERSION_TYPE]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_IP_VERSION_TYPE;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_IP_VERSION_TYPE;
 		DEBUG_INFO("IP Version type: 0x%x\n", to_sawf_sp.inner.ip_version_type);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR]) {
 		to_sawf_sp.inner.src_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4;
+		mask_mesh |= SP_RULE_FLAG_MATCH_SRC_IPV4;
 		DEBUG_INFO("src_ipv4 = %pI4 \n", &to_sawf_sp.inner.src_ipv4_addr);
 	}
 
@@ -1430,12 +1437,13 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		to_sawf_sp.inner.src_ipv4_addr_mask = nla_get_in_addr(info->attrs[SP_GNL_ATTR_SRC_IPV4_ADDR_MASK]);
 		DEBUG_INFO("src_ipv4_mask = %pI4 \n", &to_sawf_sp.inner.src_ipv4_addr_mask);
 		to_sawf_sp.inner.src_ipv4_addr &= to_sawf_sp.inner.src_ipv4_addr_mask;
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4_MASK;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]) {
 		to_sawf_sp.inner.dst_ipv4_addr = nla_get_in_addr(info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV4;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV4;
+		mask_mesh |= SP_RULE_FLAG_MATCH_DST_IPV4;
 		DEBUG_INFO("dst_ipv4 = %pI4 \n", &to_sawf_sp.inner.dst_ipv4_addr);
 	}
 
@@ -1443,14 +1451,15 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		to_sawf_sp.inner.dst_ipv4_addr_mask = nla_get_in_addr(info->attrs[SP_GNL_ATTR_DST_IPV4_ADDR_MASK]);
 		DEBUG_INFO("dst_ipv4_mask = %pI4 \n", &to_sawf_sp.inner.dst_ipv4_addr_mask);
 		to_sawf_sp.inner.dst_ipv4_addr &= to_sawf_sp.inner.dst_ipv4_addr_mask;
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV4_MASK;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV4_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR]) {
 		struct in6_addr saddr;
 		saddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_SRC_IPV6_ADDR]);
 		memcpy(to_sawf_sp.inner.src_ipv6_addr, saddr.s6_addr32, sizeof(struct in6_addr));
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6;
+		mask_mesh |= SP_RULE_FLAG_MATCH_SRC_IPV6;
 		DEBUG_INFO("src_ipv6 = %pI6 \n", &to_sawf_sp.inner.src_ipv6_addr);
 	}
 
@@ -1465,14 +1474,15 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		for (i = 0; i < IPV6_ADDR_LEN; i++) {
 			to_sawf_sp.inner.src_ipv6_addr[i] &= to_sawf_sp.inner.src_ipv6_addr_mask[i];
 		}
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6_MASK;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]) {
 		struct in6_addr daddr;
 		daddr = nla_get_in6_addr(info->attrs[SP_GNL_ATTR_DST_IPV6_ADDR]);
 		memcpy(to_sawf_sp.inner.dst_ipv6_addr, daddr.s6_addr32, sizeof(struct in6_addr));
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV6;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV6;
+		mask_mesh |= SP_RULE_FLAG_MATCH_DST_IPV6;
 		DEBUG_INFO("dst_ipv6 = %pI6\n", &to_sawf_sp.inner.dst_ipv6_addr);
 	}
 
@@ -1488,52 +1498,55 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 			to_sawf_sp.inner.dst_ipv6_addr[i] &= to_sawf_sp.inner.dst_ipv6_addr_mask[i];
 		}
 
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV6_MASK;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_IPV6_MASK;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_PROTOCOL_NUMBER]) {
 		to_sawf_sp.inner.protocol_number = nla_get_u8(info->attrs[SP_GNL_ATTR_PROTOCOL_NUMBER]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_PROTOCOL;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_PROTOCOL;
+		mask_mesh |= SP_RULE_FLAG_MATCH_PROTOCOL;
 		DEBUG_INFO("protocol_number: 0x%x\n", to_sawf_sp.inner.protocol_number);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_VLAN_ID]) {
 		to_sawf_sp.inner.vlan_id = nla_get_u16(info->attrs[SP_GNL_ATTR_VLAN_ID]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_VLAN_ID;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_VLAN_ID;
+		mask_mesh |= SP_RULE_FLAG_MATCH_VLAN_ID;
 		DEBUG_INFO("vlan_id: 0x%x\n", to_sawf_sp.inner.vlan_id);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DSCP]) {
 		to_sawf_sp.inner.dscp = nla_get_u8(info->attrs[SP_GNL_ATTR_DSCP]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DSCP;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DSCP;
+		mask_mesh |= SP_RULE_FLAG_MATCH_DSCP;
 		DEBUG_INFO("dscp: 0x%x\n", to_sawf_sp.inner.dscp);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DSCP_REMARK]) {
 		to_sawf_sp.inner.dscp_remark = nla_get_u8(info->attrs[SP_GNL_ATTR_DSCP_REMARK]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DSCP_REMARK;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DSCP_REMARK;
 		DEBUG_INFO("dscp remark: 0x%x\n", to_sawf_sp.inner.dscp_remark);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_VLAN_PCP]) {
 		to_sawf_sp.inner.vlan_pcp = nla_get_u8(info->attrs[SP_GNL_ATTR_VLAN_PCP]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP;
 		DEBUG_INFO("vlan_pcp: 0x%x\n", to_sawf_sp.inner.vlan_pcp);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_VLAN_PCP_REMARK]) {
 		to_sawf_sp.inner.vlan_pcp_remark = nla_get_u8(info->attrs[SP_GNL_ATTR_VLAN_PCP_REMARK]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP_REMARK;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_VLAN_PCP_REMARK;
 		DEBUG_INFO("vlan_pcp_remark: 0x%x\n", to_sawf_sp.inner.vlan_pcp_remark);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_MATCH_PATTERN_VALUE]) {
-		mask |= SP_RULE_FLAG_MATCH_SCS_SPI;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SCS_SPI;
 		to_sawf_sp.inner.match_pattern_value = nla_get_u32(info->attrs[SP_GNL_ATTR_MATCH_PATTERN_VALUE]);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_MATCH_PATTERN_MASK]) {
-		mask |= SP_RULE_FLAG_MATCH_SCS_SPI;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SCS_SPI;
 		to_sawf_sp.inner.match_pattern_mask = nla_get_u32(info->attrs[SP_GNL_ATTR_MATCH_PATTERN_MASK]);
 	}
 
@@ -1562,11 +1575,11 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 
 	if (info->attrs[SP_GNL_ATTR_SRC_PORT_RANGE_START] && info->attrs[SP_GNL_ATTR_SRC_PORT_RANGE_END]) {
 		to_sawf_sp.inner.src_port_range_start = nla_get_u16(info->attrs[SP_GNL_ATTR_SRC_PORT_RANGE_START]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_PORT_RANGE_START;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_PORT_RANGE_START;
 		DEBUG_INFO("Source port range start: 0x%x\n", to_sawf_sp.inner.src_port_range_start);
 
 		to_sawf_sp.inner.src_port_range_end = nla_get_u16(info->attrs[SP_GNL_ATTR_SRC_PORT_RANGE_END]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_PORT_RANGE_END;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_PORT_RANGE_END;
 		DEBUG_INFO("Source port range end: 0x%x\n", to_sawf_sp.inner.src_port_range_end);
 	}
 
@@ -1580,11 +1593,11 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 
 	if (info->attrs[SP_GNL_ATTR_DST_PORT_RANGE_START] && info->attrs[SP_GNL_ATTR_DST_PORT_RANGE_END]) {
 		to_sawf_sp.inner.dst_port_range_start = nla_get_u16(info->attrs[SP_GNL_ATTR_DST_PORT_RANGE_START]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_PORT_RANGE_START;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_PORT_RANGE_START;
 		DEBUG_INFO("Destination port range start: 0x%x\n", to_sawf_sp.inner.dst_port_range_start);
 
 		to_sawf_sp.inner.dst_port_range_end = nla_get_u16(info->attrs[SP_GNL_ATTR_DST_PORT_RANGE_END]);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_PORT_RANGE_END;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_PORT_RANGE_END;
 		DEBUG_INFO("Destination port range end: 0x%x\n", to_sawf_sp.inner.dst_port_range_end);
 	}
 
@@ -1606,7 +1619,7 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		to_sawf_sp.inner.src_ifindex = dev->ifindex;
 		dev_put(dev);
 		DEBUG_INFO("Source interface: %s Source interface index: %d \n", to_sawf_sp.inner.src_iface, to_sawf_sp.inner.src_ifindex);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_SRC_IFACE;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_SRC_IFACE;
 	}
 
 	if (info->attrs[SP_GNL_ATTR_DST_IFACE]) {
@@ -1622,13 +1635,38 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 		to_sawf_sp.inner.dst_ifindex = dev->ifindex;
 		dev_put(dev);
 		DEBUG_INFO("Destination interface: %s Destination Interface Index: %d \n", to_sawf_sp.inner.dst_iface, to_sawf_sp.inner.dst_ifindex);
-		mask |= SP_RULE_FLAG_MATCH_SAWF_DST_IFACE;
+		mask_sawf |= SP_RULE_FLAG_MATCH_SAWF_DST_IFACE;
 	}
 
 	/*
 	 * Default classifier is SAWF, but if SCS rule is received, then classifier type will be
 	 * overwritten by SCS.
 	 */
+	if (info->attrs[SP_GNL_ATTR_SVC_INTERVAL_DL]) {
+		to_sawf_sp.inner.service_interval_dl = nla_get_u8(info->attrs[SP_GNL_ATTR_SVC_INTERVAL_DL]);
+		DEBUG_INFO("Service interval DL: 0x%x\n", to_sawf_sp.inner.service_interval_dl);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_SVC_INTERVAL_UL]) {
+		to_sawf_sp.inner.service_interval_ul = nla_get_u8(info->attrs[SP_GNL_ATTR_SVC_INTERVAL_UL]);
+		DEBUG_INFO("Service interval UL: 0x%x\n", to_sawf_sp.inner.service_interval_ul);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_BURST_SIZE_DL]) {
+		to_sawf_sp.inner.burst_size_dl = nla_get_u32(info->attrs[SP_GNL_ATTR_BURST_SIZE_DL]);
+		DEBUG_INFO("Burst size DL: 0x%x\n", to_sawf_sp.inner.burst_size_dl);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_BURST_SIZE_UL]) {
+		to_sawf_sp.inner.burst_size_ul = nla_get_u32(info->attrs[SP_GNL_ATTR_BURST_SIZE_UL]);
+		DEBUG_INFO("Burst size UL: 0x%x\n", to_sawf_sp.inner.burst_size_ul);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_SENSE_MESH_FLAG_IN]) {
+		to_sawf_sp.inner.flags = nla_get_u32(info->attrs[SP_GNL_ATTR_SENSE_MESH_FLAG_IN]);
+		DEBUG_INFO("MESH classfiers Flags: 0x%x\n", to_sawf_sp.inner.flags);
+	}
+
 	to_sawf_sp.classifier_type = SP_RULE_TYPE_SAWF;
 	if (info->attrs[SP_GNL_ATTR_CLASSIFIER_TYPE]) {
 		to_sawf_sp.classifier_type = nla_get_u8(info->attrs[SP_GNL_ATTR_CLASSIFIER_TYPE]);
@@ -1639,7 +1677,8 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	/*
 	 * Update flag mask for valid rules
 	 */
-	to_sawf_sp.inner.flags_sawf = mask;
+	to_sawf_sp.inner.flags_sawf = mask_sawf;
+	to_sawf_sp.inner.flags |= mask_mesh ;
 
 	/*
 	 * Update rules in database
@@ -1765,7 +1804,12 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u16(msg, SP_GNL_ATTR_SRC_PORT_RANGE_END, rule.inner.src_port_range_end) ||
 	    nla_put_u16(msg, SP_GNL_ATTR_DST_PORT_RANGE_START, rule.inner.dst_port_range_start) ||
 	    nla_put_u16(msg, SP_GNL_ATTR_DST_PORT_RANGE_END, rule.inner.dst_port_range_end) ||
-	    nla_put_u8(msg, SP_GNL_ATTR_AE_TYPE, rule.inner.ae_type)) {
+	    nla_put_u8(msg, SP_GNL_ATTR_AE_TYPE, rule.inner.ae_type) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_SVC_INTERVAL_DL, rule.inner.service_interval_dl) ||
+	    nla_put_u8(msg, SP_GNL_ATTR_SVC_INTERVAL_UL, rule.inner.service_interval_ul) ||
+	    nla_put_u32(msg, SP_GNL_ATTR_BURST_SIZE_DL, rule.inner.burst_size_dl) ||
+	    nla_put_u32(msg, SP_GNL_ATTR_BURST_SIZE_UL, rule.inner.burst_size_ul) ||
+	    nla_put_u32(msg, SP_GNL_ATTR_SENSE_MESH_FLAG_IN, rule.inner.flags)) {
 		goto put_failure;
 	}
 
@@ -1891,6 +1935,12 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_AE_TYPE]		= { .type = NLA_U8, },
 	[SP_GNL_ATTR_SRC_IFACE]		= { .type = NLA_NUL_STRING, },
 	[SP_GNL_ATTR_DST_IFACE]		= { .type = NLA_NUL_STRING, },
+	[SP_GNL_ATTR_AE_TYPE]			= { .type = NLA_U8, },
+	[SP_GNL_ATTR_SVC_INTERVAL_DL]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_SVC_INTERVAL_UL]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_BURST_SIZE_DL]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_BURST_SIZE_UL]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_SENSE_MESH_FLAG_IN]		= { .type = NLA_U32, },
 };
 
 /* Spm generic netlink operations */
