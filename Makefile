@@ -5,7 +5,7 @@
 #
 # Target module name
 #
-TARGET := emesh-sp
+TARGET := emesh-sp-mcc
 
 obj-m += $(TARGET).o
 
