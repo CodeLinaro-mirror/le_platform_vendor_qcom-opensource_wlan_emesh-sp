@@ -21,3 +21,6 @@ ccflags-y += -DSP_DEBUG_LEVEL=0
 
 build:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) V=1 modules
+
+clean:
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) clean
