@@ -1,19 +1,7 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- *
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #ifndef _SP_API_H
@@ -99,6 +87,44 @@
 #define	SP_RULE_INVALID_VLAN_TCI		0xFFFF		/* Invalid vlan tci */
 #define	SP_RULE_INVALID_PRIORITY		0xFF		/* Invalid Priority value */
 #define SP_RULE_INVALID_MSCS_TID_BITMAP		0x00		/* Invalid MSCS Bitmap */
+#define SP_RULE_INVALID_IPV4_FRAG_THRESH        0x00            /* Invalid fragmentation threshold */
+
+#define SP_RULE_MAX_VDEV_PER_ML 7
+#define WLAN_SSID_MAX_LEN	32	/* Max ssid len */
+#define SP_MAPDB_RADIO_FLAG_AND	"AND"	/* Radio mode AND */
+#define SP_MAPDB_RADIO_FLAG_OR	"OR"	/* Radio mode OR */
+#define SP_RULE_VDEV_BAND_LENGTH	4	/* Max VDEV Band len as string */
+#define SP_RULE_VDEV_BANDWIDTH_LENGTH	6	/* Max VDEV Bandwidth len as string */
+#define SP_RULE_BAND_VALID	1	/* Indicates valid band */
+#define SP_RULE_PCP_VALID	0x4	/* Defined as WLAN driver */
+#define SP_RULE_AC_VALID	0x8	/* Defined as WLAN driver */
+
+/*
+ * sp_mapdb_radio_band
+ * 	WLAN supported bands
+ */
+enum sp_mapdb_radio_band {
+	SP_MAPDB_RADIO_BAND_INVALID,	/* Invalid radio band */
+	SP_MAPDB_RADIO_BAND_2G,			/* 2G radio band */
+	SP_MAPDB_RADIO_BAND_5G,			/* 5G radio band */
+	SP_MAPDB_RADIO_BAND_5GH,		/* 5GH radio band */
+	SP_MAPDB_RADIO_BAND_5GL,		/* 5GL radio band */
+	SP_MAPDB_RADIO_BAND_6G,			/* 6G radio band */
+};
+
+/*
+ * sp_mapdb_radio_bandwidth
+ * 	WLAN supported radio bandwidth
+ */
+enum sp_mapdb_radio_bandwidth {
+	SP_MAPDB_RADIO_BANDWIDTH_INVALID,		/* Invalid radio bandwidth */
+	SP_MAPDB_RADIO_BANDWIDTH_20,		/* Bandwidth 20Mhz */
+	SP_MAPDB_RADIO_BANDWIDTH_40,		/* Bandwidth 40Mhz */
+	SP_MAPDB_RADIO_BANDWIDTH_80,		/* Bandwidth 80Mhz */
+	SP_MAPDB_RADIO_BANDWIDTH_160,		/* Bandwidth 160Mhz */
+	SP_MAPDB_RADIO_BANDWIDTH_80_80,		/* Bandwidth 80_80Mhz */
+	SP_MAPDB_RADIO_BANDWIDTH_320,		/* Bandwidth 320Mhz */
+};
 
 /*
  * sp_mapdb_update_results
@@ -132,6 +158,16 @@ enum sp_mapdb_notify_types {
 	SP_MAPDB_MODIFY_RULE,				/* Notify rule has been modified. */
 };
 typedef enum sp_mapdb_notify_types sp_mapdb_notify_type_t;
+
+/*
+ * sp_mapdb_prioritization_sync_types
+ * 	Types of notification.
+ */
+enum sp_mapdb_prioritization_sync_types {
+	SP_MAPDB_SYNC_PRIORITIZED,			/* Flow is prioritized for the first time */
+	SP_MAPDB_SYNC_UPDATED,				/* Flow priotization is updated. */
+	SP_MAPDB_SYNC_DEPRIORITIZED,			/* Flow is deprioritized */
+};
 
 /*
  * sp_mapdb_add_remove_filter_types
@@ -193,7 +229,7 @@ struct sp_rule_inner {
 	 * If “match destination mac address” flag
 	 * bit is set, this field shall be included,
 	 * otherwise this field shall be omitted.
-	*/
+	 */
 	uint8_t da[ETH_ALEN];
 
 	/*
@@ -264,7 +300,6 @@ struct sp_rule_inner {
 	 * Service class id
 	 */
 	uint8_t service_class_id;
-
 	/*
 	 * Source ipv4 address mask
 	 */
@@ -354,6 +389,107 @@ struct sp_rule_inner {
 	 * Source Interface Index
 	 */
 	uint8_t src_ifindex;
+	/*
+	 * Threshold size to initiate fragmentation
+	 */
+	uint16_t ipv4_frag_thresh;
+
+	/*
+	 * Flag indicating WLAN specific parameters
+	 */
+	uint8_t wlan_flow;
+
+	/*
+	 * Transmitter mac
+	 */
+	uint8_t transmitter_mac[ETH_ALEN];
+
+	/*
+	 * Receiver mac
+	 */
+	uint8_t receiver_mac[ETH_ALEN];
+
+	/*
+	 * Array of radio bands for each possible vdes
+	 */
+	uint8_t radio_band[SP_RULE_MAX_VDEV_PER_ML];
+
+	/*
+	 * Array of radio channels for each possible VDEVs
+	 */
+	uint8_t radio_channel[SP_RULE_MAX_VDEV_PER_ML];
+
+	/*
+	 * Array of radio bandwidth for each possible VDEVs
+	 */
+	uint8_t radio_bandwidth[SP_RULE_MAX_VDEV_PER_ML];
+
+	/*
+	 * band mode
+	 */
+	uint8_t band_mode;
+
+	/*
+	 * channel mode
+	 */
+	uint8_t channel_mode;
+
+	/*
+	 * bandwidth mode
+	 */
+	uint8_t bandwidth_mode;
+
+	/*
+	 * bssid
+	 */
+	uint8_t bssid[ETH_ALEN];
+
+	/*
+	 * ssid length
+	 */
+	uint8_t ssid_len;
+
+	/*
+	 * ssid
+	 */
+	char ssid[WLAN_SSID_MAX_LEN];
+
+	/*
+	 * access class
+	 */
+	uint8_t access_class;
+
+	/*
+	 * priority
+	 */
+	uint8_t priority;
+
+	/*
+	 * valid access class
+	 */
+	bool valid_ac;
+};
+
+/*
+ * sp_rule_radio_info
+ * 	This structure stores radio metadata from user
+ */
+struct sp_rule_radio_info {
+
+	/*
+	 * array of radio band from user
+	 */
+	char radio_band[SP_RULE_MAX_VDEV_PER_ML][SP_RULE_VDEV_BAND_LENGTH];
+
+	/*
+	 * array of radio bandwidth from user
+	 */
+	char radio_bandwidth[SP_RULE_MAX_VDEV_PER_ML][SP_RULE_VDEV_BANDWIDTH_LENGTH];
+
+	/*
+	 * array of radio channel from user
+	 */
+	uint8_t radio_channel[SP_RULE_MAX_VDEV_PER_ML];
 };
 
 /*
@@ -412,6 +548,8 @@ struct sp_rule_input_params {
 	uint8_t dst_ifindex;			/* Destination interface index */
 	uint8_t dev_addr[ETH_HLEN];		/* Netdevice address in case of WDS EXT case */
 	uint8_t src_ifindex;			/* Source Interface Index */
+	struct net_device *src_dev;		/* src dev */
+	struct net_device *dest_dev;		/* dest dev */
 };
 
 /*
@@ -427,6 +565,122 @@ struct sp_rule_output_params {
 	uint8_t sawf_rule_type;		/* rule based flag*/
 	enum sp_rule_ae_type ae_type;	/* acceleration engine mode */
 	uint32_t key;			/* Key to get hash bucket index*/
+	uint16_t ipv4_frag_thresh;	/* Threshold size to initiate fragmentation */
+};
+
+/*
+ * sp_rule_del_params
+ *	This structure contains parameters necessary to delete tuple based rules
+ */
+struct sp_rule_del_params {
+	uint32_t rule_id;		/* Rule ID */
+	uint32_t key;			/* Key to get hash bucket index */
+	uint32_t src_ip[4];		/* Source IP Address */
+	uint32_t dest_ip[4];		/* Destination IP Address */
+	uint16_t src_port;		/* Source Port */
+	uint16_t dest_port;		/* Destination Port */
+	int protocol;			/* Protocl number */
+	int ip_version;			/* IP version */
+};
+
+/*
+ * sp_rule_wifi_plugin_metadata
+ * 	contains parameters for plugin module
+ */
+struct sp_rule_wifi_plugin_metadata {
+	uint8_t access_class;	/* access class */
+	uint8_t valid_flags;	/* valid flags */
+	uint8_t band_mode;	/* band mode */
+	uint8_t channel_mode;	/* channel mode */
+	uint8_t bandwidth_mode;	/* bandwidth mode */
+	uint8_t skb_prio;	/* skb priority for the packet */
+	uint8_t priority;	/* user given priority */
+	uint8_t ssid_len;	/* ssid len */
+	uint8_t src_mac[ETH_ALEN];	/*Sender's mac */
+	uint8_t dest_mac[ETH_ALEN];	/*Receiver's mac */
+	uint8_t bssid[ETH_ALEN];	/* bssid */
+	uint8_t ra_mac[ETH_ALEN];	/* ra_mac */
+	uint8_t ta_mac[ETH_ALEN];	/* ta_mac */
+	uint8_t radio_band[SP_RULE_MAX_VDEV_PER_ML];	/* radio band */
+	uint8_t radio_bw[SP_RULE_MAX_VDEV_PER_ML];	/* radio bandwidth */
+	uint8_t radio_chan[SP_RULE_MAX_VDEV_PER_ML];	/* radio channel */
+	uint8_t pcp;	/* Receiver's pcp value */
+	uint8_t dscp;	/* Receiver's dscp value */
+	struct net_device *dest_dev;	/* dest dev */
+	struct net_device *src_dev;	/* src dev */
+	char ssid[WLAN_SSID_MAX_LEN];	/* ssid */
+} __attribute__((packed));
+
+/*
+ * callback for plugin
+ * 	Emesh SP rule query callback to which Wi-Fi plugin module will register
+ */
+typedef bool (*sp_rule_wifi_sawf_rule_query_callback_t)(struct sp_rule_wifi_plugin_metadata *wifi_info);
+
+/*
+ * callback for plugin
+ * 	Emesh sp rule validate callback to which Wi-Fi plugin module will register
+ */
+typedef bool (*sp_rule_wifi_sawf_rule_validate_callback_t)(struct sp_rule_wifi_plugin_metadata *wifi_info);
+
+/*
+ * Data structure for emesh-sp wifi-plugin callbacks
+ */
+struct emesh_sp_wifi_sawf_callbacks {
+	sp_rule_wifi_sawf_rule_query_callback_t sawf_rule_query_callback;	/* WLAN rule query callback */
+	sp_rule_wifi_sawf_rule_validate_callback_t sawf_rule_validate_callback;	/* WLAN rule validate callback */
+};
+
+/*
+ * Register WLAN rule query callback with plugin
+ */
+int sp_mapdb_wifi_plugin_query_wlan_rule_cb_register(struct emesh_sp_wifi_sawf_callbacks *wifi_plugin_cb);
+
+/*
+ * Unregister WLAN rule query callback with plugin
+ */
+void sp_mapdb_wifi_plugin_query_wlan_rule_cb_unregister(void);
+
+/*
+ * Register WLAN rule validate callback with plugin
+ */
+int sp_mapdb_wifi_plugin_validate_wlan_rule_cb_register(struct emesh_sp_wifi_sawf_callbacks *wifi_plugin_cb);
+
+/*
+ * Unregister WLAN rule validate callback with plugin
+ */
+void sp_mapdb_wifi_plugin_validate_wlan_rule_cb_unregister(void);
+
+/*
+ * sp_del_sync_msg
+ *	This structure repressents the msg contents of a msg sent from SPM to user space based on 5 tuple
+ */
+struct __attribute__((__packed__)) sp_del_sync_msg {
+	uint32_t src_ip[4];		/* Src IP Addr */
+	uint32_t dst_ip[4];		/* Dst IP Addr */
+	uint16_t src_port;		/* Src Port */
+	uint16_t dst_port;		/* Dst Port */
+	uint8_t protocol;		/* Protocol number */
+	uint8_t ip_version;		/* IPv4 or IPv6 */
+};
+
+
+/*
+ * sp_rm_sync_msg
+ *	This structure repressents the msg contents of a msg sent from ECM to RM
+ */
+struct __attribute__((__packed__)) sp_rm_sync_msg {
+	uint8_t flow_sid;		/* Flow Service class ID */
+	uint8_t return_sid;		/* Return Service class ID */
+	uint32_t src_ip[4];		/* Src IP Addr */
+	uint32_t dst_ip[4];		/* Dst IP Addr */
+	uint16_t src_port;		/* Src Port */
+	uint16_t dst_port;		/* Dst Port */
+	uint16_t protocol;		/* Protocol number */
+	uint8_t ip_version;		/* IPv4 or IPv6 */
+	uint8_t src_mac[6];		/* Src Mac Addr */
+	uint8_t dst_mac[6];		/* Dst Mac Addr */
+	uint8_t sync_type;		/* Is this due to flow being priorited, updated, or deprioritized */
 };
 
 sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule);
@@ -436,12 +690,14 @@ void sp_mapdb_apply(struct sk_buff *skb, uint8_t *smac, uint8_t *dmac);
 void sp_mapdb_notifier_register(struct notifier_block *nb);
 void sp_mapdb_notifier_unregister(struct notifier_block *nb);
 void sp_mapdb_ruletable_flush(void);
-void sp_mapdb_ifli_rule_flush(uint32_t rule_id, uint32_t key);
+void sp_mapdb_ifli_rule_flush(struct sp_rule_del_params *del_params);
 void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *params,
 			      struct sp_rule_output_params *rule_output);
+int sp_mapdb_rm_sync(struct sp_rm_sync_msg *rm_msg);
 void sp_mapdb_apply_scs(struct sk_buff *skb, struct sp_rule_input_params *params,
 			      struct sp_rule_output_params *rule_output);
 void sp_mapdb_apply_mscs(struct sk_buff *skb, struct sp_rule_input_params *params,
 			      struct sp_rule_output_params *output);
 char *sp_mapdb_get_classifier_type_str(enum sp_rule_classifier_type type);
+int sp_mapdb_delete_notify_sync(struct sp_del_sync_msg *del_msg);
 #endif
