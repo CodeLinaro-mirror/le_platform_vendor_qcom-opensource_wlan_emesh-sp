@@ -1,19 +1,7 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- *
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * SPDX-License-Identifier: ISC
  */
 
 #include <linux/kernel.h>
@@ -30,6 +18,11 @@
 
 #define SP_MAPDB_BUCKET_SIZE_MAX 255
 
+/*
+ * Callback structure to call into plugin module
+ */
+static struct emesh_sp_wifi_sawf_callbacks emesh_sp_wifi;
+
 /* Spinlock for SMP updating the rule table. */
 DEFINE_SPINLOCK(sp_mapdb_lock);
 
@@ -43,9 +36,27 @@ static unsigned long single_writer = 0;
 static struct genl_family sp_genl_family;
 
 /*
+ * Multicast group for spm
+ */
+enum spm_multicast_groups {
+	SPM_MCGRP_DELETE,
+};
+
+static const struct genl_multicast_group sp_genl_mcgrps[] = {
+	[SPM_MCGRP_DELETE] = { .name = "spm_del_event" },
+};
+
+
+/*
  * Registration/Unregistration methods for SPM rule update/add/delete notifications.
  */
 static RAW_NOTIFIER_HEAD(sp_mapdb_notifier_chain);
+
+/*
+ * Structures for sync msg
+ */
+struct net *sync_msg_net;
+unsigned int port_id;
 
 /*
  * sp_mapdb_get_hash
@@ -78,6 +89,53 @@ static uint32_t sp_mapdb_get_hash(struct sp_mapdb_5tuple *tuple)
 
 	DEBUG_INFO("hash:  val %d  max %d\n", val, val & (SP_MAPDB_BUCKET_SIZE_MAX - 1));
 	return val & (SP_MAPDB_BUCKET_SIZE_MAX - 1);
+}
+
+/*
+ * sp_mapdb_rule_5tuple_cmp_v4()
+ *	Checks if a rule is mapped to a particular ipv4 5-tuple
+ */
+static inline bool sp_mapdb_rule_5tuple_cmp_v4(struct sp_rule rule, struct sp_mapdb_5tuple *tuple)
+{
+	if (rule.inner.src_ipv4_addr != tuple->src_addr[0] || rule.inner.dst_ipv4_addr != tuple->dest_addr[0])
+		return false;
+
+	return true;
+}
+
+/*
+ * sp_mapdb_rule_5tuple_cmp_v6()
+ *	Checks if a rule is mapped to a particular ipv6 5-tuple
+ */
+static inline bool sp_mapdb_rule_5tuple_cmp_v6(struct sp_rule rule, struct sp_mapdb_5tuple *tuple)
+{
+	if (memcmp(rule.inner.src_ipv6_addr, tuple->src_addr, sizeof(uint32_t) * 4) || memcmp(rule.inner.dst_ipv6_addr, tuple->dest_addr, sizeof(uint32_t) * 4))
+		return false;
+
+	return true;
+}
+
+/*
+ * sp_mapdb_rule_5tuple_cmp()
+ *	Checks if a rule is mapped to a particular 5-tuple
+ */
+static bool sp_mapdb_rule_5tuple_cmp(struct sp_rule rule, struct sp_mapdb_5tuple *tuple)
+{
+	if (rule.inner.src_port != tuple->src_port || rule.inner.dst_port != tuple->dest_port || rule.inner.protocol_number != tuple->protocol) {
+		return false;
+	}
+
+	if (rule.inner.ip_version_type == 4) {
+		if (!sp_mapdb_rule_5tuple_cmp_v4(rule, tuple))
+			return false;
+	}
+
+	if (rule.inner.ip_version_type == 6) {
+		if (!sp_mapdb_rule_5tuple_cmp_v6(rule, tuple))
+			return false;
+	}
+
+	return true;
 }
 
 /*
@@ -121,7 +179,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 			/*
 			 * If the rule is sawf-scs or legacy scs type, then we further check for
 			 * mac address of the netdevice interfaces.
-			 */                  
+			 */
 			if (flags & SP_RULE_FLAG_MATCH_DST_IFINDEX) {
 				compare_result = ether_addr_equal(params->dev_addr, rule->inner.da) &&
 					(params->dst_ifindex == rule->inner.dst_ifindex);
@@ -131,7 +189,7 @@ static inline bool sp_mapdb_rule_match_sawf(struct sp_rule *rule, struct sp_rule
 				DEBUG_WARN("Netdev address and device ID match failed!\n");
 				return false;
 			}
-		} 
+		}
 	}
 
 	if (flags & SP_RULE_FLAG_MATCH_SAWF_DST_PORT) {
@@ -448,11 +506,11 @@ static inline void sp_mapdb_rules_init(void)
 {
 	int i;
 
-	spin_lock(&sp_mapdb_lock);
+	spin_lock_bh(&sp_mapdb_lock);
 	for (i = 0; i < SP_MAPDB_RULE_MAX_PRECEDENCENUM; i++) {
 		INIT_LIST_HEAD(&rule_manager.prec_map[i].rule_list);
 	}
-	spin_unlock(&sp_mapdb_lock);
+	spin_unlock_bh(&sp_mapdb_lock);
 
 	hash_init(rule_manager.rule_hashmap);
 	rule_manager.rule_count = 0;
@@ -475,20 +533,85 @@ static void sp_rule_destroy_rcu(struct rcu_head *head)
 
 /*
  * sp_mapdb_search_hashentry()
- * 	Find the hashentry that stores the rule_node by the ruleid and rule_type
+ *	Find the hashentry based on rule id if rule id is valid. Otherwise use 5-tuple match.
  */
-static struct sp_mapdb_rule_id_hashentry *sp_mapdb_search_hashentry(uint32_t key, uint32_t ruleid, uint8_t rule_type)
+static struct sp_mapdb_rule_id_hashentry *sp_mapdb_search_hashentry(uint32_t key, uint32_t ruleid, uint8_t rule_type, struct sp_mapdb_5tuple *tuple)
 {
 	struct sp_mapdb_rule_id_hashentry *hashentry_iter;
 
 	hash_for_each_possible(rule_manager.rule_hashmap, hashentry_iter, hlist, key) {
-		if ((hashentry_iter->rule_node->rule.id == ruleid) &&
+		/*
+		 * It is possible there are multiple rules without valid rule id
+		 * which can only be identified by tuple
+		 */
+		if (rule_type == SP_RULE_TYPE_SAWF_IFLI) {
+			if (!tuple) {
+				DEBUG_WARN("Tuple is invalid for IFLI rule hash search\n");
+				return NULL;
+			}
+
+			if (sp_mapdb_rule_5tuple_cmp(hashentry_iter->rule_node->rule, tuple)) {
+				return hashentry_iter;
+			}
+
+		} else if ((hashentry_iter->rule_node->rule.id == ruleid) &&
 		     (hashentry_iter->rule_node->rule.classifier_type == rule_type)) {
 			return hashentry_iter;
 		}
 	}
 
 	return NULL;
+}
+
+/*
+ * sp_mapdb_get_tuple_v4()
+ *	Fills sp_mapdb_5tuple structure given an ipv4 rule
+ */
+static inline void sp_mapdb_get_tuple_v4(struct sp_rule *rule, struct sp_mapdb_5tuple *tuple)
+{
+	tuple->src_addr[0] = rule->inner.src_ipv4_addr;
+	tuple->dest_addr[0] = rule->inner.dst_ipv4_addr;
+}
+
+/*
+ * sp_mapdb_get_tuple_v6()
+ *	Fills sp_mapdb_5tuple structure given an ipv6 rule
+ */
+static inline void sp_mapdb_get_tuple_v6(struct sp_rule *rule, struct sp_mapdb_5tuple *tuple)
+{
+	memcpy(tuple->src_addr, rule->inner.src_ipv6_addr, sizeof(uint32_t) * 4);
+	memcpy(tuple->dest_addr, rule->inner.dst_ipv6_addr, sizeof(uint32_t) * 4);
+}
+
+/*
+ * sp_mapdb_get_tuple()
+ *	Fills sp_mapdb_5tuple structure given a rule
+ */
+static void sp_mapdb_get_tuple(struct sp_rule *rule, struct sp_mapdb_5tuple *tuple)
+{
+	if (rule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4 && rule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_DST_IPV4) {
+		sp_mapdb_get_tuple_v4(rule, tuple);
+	} else if (rule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6 && rule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_DST_IPV6) {
+		sp_mapdb_get_tuple_v6(rule, tuple);
+	}
+
+	tuple->src_port = rule->inner.src_port;
+	tuple->dest_port = rule->inner.dst_port;
+	tuple->protocol = rule->inner.protocol_number;
+}
+
+/*
+ * sp_mapdb_is_base_ae_ppe()
+ *	Returns if base AE is PPE
+ */
+static int sp_mapdb_is_base_ae_ppe(struct sp_rule *rule)
+{
+	if (rule->inner.ae_type == SP_RULE_AE_TYPE_PPE || rule->inner.ae_type == SP_RULE_AE_TYPE_PPE_VP ||
+		rule->inner.ae_type == SP_RULE_AE_TYPE_PPE_DS) {
+		return true;
+	}
+
+	return false;
 }
 
 /*
@@ -509,6 +632,19 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule, uint8
 	struct sp_mapdb_rule_id_hashentry *new_hashentry;
 	struct sp_mapdb_5tuple tuple = {0};
 	newrule->key = SP_RULE_INVALID_RULE_ID;
+
+	/*
+	 * An IFLI rule with PPE AE must be a background flow
+	 * there is no need to maintain these rules, but ECM
+	 * will still be notified in case AE switch is necessary
+	 */
+	if (sp_mapdb_is_base_ae_ppe(newrule) && rule_type == SP_RULE_TYPE_SAWF_IFLI) {
+		sp_mapdb_get_tuple(newrule, &tuple);
+		key = sp_mapdb_get_hash(&tuple);
+		newrule->key = key;
+		sp_mapdb_notifiers_call(newrule, SP_MAPDB_ADD_RULE);
+		return SP_MAPDB_UPDATE_RESULT_SUCCESS_ADD;
+	}
 
 	DEBUG_INFO("%px: Try adding rule id = %d with rule_type: %d\n", newrule, newrule->id, rule_type);
 
@@ -540,40 +676,14 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule, uint8
 	 * Update the key for IFLI rule type
 	 */
 	if (rule_type == SP_RULE_TYPE_SAWF_IFLI) {
-		if (newrule->id != SP_RULE_INVALID_RULE_ID && newrule->id) {
-			DEBUG_ERROR("%px:IFLI rule must be pushed without rule ID\n", newrule);
-			return SP_MAPDB_UPDATE_RESULT_ERR;
-		}
-
-		if (newrule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV6) {
-			tuple.src_addr[0] = newrule->inner.src_ipv6_addr[0];
-			tuple.src_addr[1] = newrule->inner.src_ipv6_addr[1];
-			tuple.src_addr[2] = newrule->inner.src_ipv6_addr[2];
-			tuple.src_addr[3] = newrule->inner.src_ipv6_addr[3];
-		} else if (newrule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4) {
-			tuple.src_addr[0] = newrule->inner.src_ipv4_addr;
-		}
-
-		if (newrule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_DST_IPV6) {
-			tuple.dest_addr[0] = newrule->inner.dst_ipv6_addr[0];
-			tuple.dest_addr[1] = newrule->inner.dst_ipv6_addr[1];
-			tuple.dest_addr[2] = newrule->inner.dst_ipv6_addr[2];
-			tuple.dest_addr[3] = newrule->inner.dst_ipv6_addr[3];
-		} else if (newrule->inner.flags_sawf & SP_RULE_FLAG_MATCH_SAWF_SRC_IPV4) {
-			tuple.dest_addr[0] = newrule->inner.dst_ipv4_addr;
-		}
-
-		tuple.src_port = newrule->inner.src_port;
-		tuple.dest_port = newrule->inner.dst_port;
-		tuple.protocol = newrule->inner.protocol_number;
-
+		sp_mapdb_get_tuple(newrule, &tuple);
 		key = sp_mapdb_get_hash(&tuple);
 	}
 
-	spin_lock(&sp_mapdb_lock);
-	cur_hashentry = sp_mapdb_search_hashentry(key, newrule->id, rule_type);
+	spin_lock_bh(&sp_mapdb_lock);
+	cur_hashentry = sp_mapdb_search_hashentry(key, newrule->id, rule_type, &tuple);
 	if (!cur_hashentry) {
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
 		new_hashentry = (struct sp_mapdb_rule_id_hashentry *)kzalloc(sizeof(struct sp_mapdb_rule_id_hashentry), GFP_KERNEL);
 		if (!new_hashentry) {
 			DEBUG_ERROR("%px:Error, allocate hashentry failed.\n", newrule);
@@ -585,18 +695,18 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule, uint8
 		 * Inserting new rule node and hash entry in prec_map
 		 * and hashmap respectively.
 		 */
-		spin_lock(&sp_mapdb_lock);
+		spin_lock_bh(&sp_mapdb_lock);
 		new_hashentry->rule_node = new_rule_node;
 
 		list_add_rcu(&new_rule_node->rule_list, &rule_manager.prec_map[newrule_precedence].rule_list);
 		hash_add(rule_manager.rule_hashmap, &new_hashentry->hlist,key);
 		rule_manager.rule_count++;
-		spin_unlock(&sp_mapdb_lock);
-
-		DEBUG_INFO("%px:Success rule id=%d with rule_type: %d\n",
-			   newrule, newrule->id, rule_type);
+		spin_unlock_bh(&sp_mapdb_lock);
 
 		newrule->key = key;
+		new_rule_node->rule.key = key;
+		DEBUG_INFO("%px:Success %s = %d rule_type: %d \n",
+				newrule, (rule_type == SP_RULE_TYPE_SAWF_IFLI) ? "key" : "rule_id",  (rule_type == SP_RULE_TYPE_SAWF_IFLI) ? newrule->key:newrule->id ,rule_type);
 
 		/*
 		 * Since this is inserting a new rule, the old precendence
@@ -612,9 +722,12 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule, uint8
 	if (cur_rule_node->rule.rule_precedence == newrule_precedence) {
 		list_replace_rcu(&cur_rule_node->rule_list, &new_rule_node->rule_list);
 		cur_hashentry->rule_node = new_rule_node;
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
+		newrule->key = key;
+		new_rule_node->rule.key = key;
 
-		DEBUG_INFO("%px:overwrite rule id =%d rule_type: %d success.\n", newrule, newrule->id, rule_type);
+		DEBUG_INFO("%px:overwrite %s = %x rule_type: %d \n",
+				newrule, (rule_type == SP_RULE_TYPE_SAWF_IFLI) ? "key" : "rule_id",  (rule_type == SP_RULE_TYPE_SAWF_IFLI) ? newrule->key:newrule->id ,rule_type);
 
 		/*
 		 * If precedence doesn't change then it has to be some fields modified.
@@ -622,7 +735,6 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule, uint8
 		sp_mapdb_notifiers_call(newrule, SP_MAPDB_MODIFY_RULE);
 
 		call_rcu(&cur_rule_node->rcu, sp_rule_destroy_rcu);
-		newrule->key = key;
 
 		return SP_MAPDB_UPDATE_RESULT_SUCCESS_MODIFY;
 	}
@@ -631,7 +743,7 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule, uint8
 	list_add_rcu(&new_rule_node->rule_list, &rule_manager.prec_map[newrule_precedence].rule_list);
 	cur_hashentry->rule_node = new_rule_node;
 	newrule->key = key;
-	spin_unlock(&sp_mapdb_lock);
+	spin_unlock_bh(&sp_mapdb_lock);
 
 	/*
 	 * Fields other than rule_precedence can still be updated along with rule_precedence.
@@ -649,31 +761,52 @@ static sp_mapdb_update_result_t sp_mapdb_rule_add(struct sp_rule *newrule, uint8
  *
  * The memory for the rule node will also be deleted as hash entry will also be freed.
  */
-static sp_mapdb_update_result_t sp_mapdb_rule_delete(uint32_t ruleid, uint32_t key, uint8_t rule_type)
+static sp_mapdb_update_result_t sp_mapdb_rule_delete(uint32_t ruleid, uint32_t key, uint8_t rule_type, struct sp_mapdb_5tuple *tuple)
 {
 	struct sp_mapdb_rule_node *tobedeleted;
 	struct sp_mapdb_rule_id_hashentry *cur_hashentry = NULL;
+	struct sp_del_sync_msg del_msg = {0};
 
-	spin_lock(&sp_mapdb_lock);
+	spin_lock_bh(&sp_mapdb_lock);
 	if (rule_manager.rule_count == 0) {
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
 		DEBUG_WARN("rule table is empty\n");
 		return SP_MAPDB_UPDATE_RESULT_ERR_TBLEMPTY;
 	}
 
-	cur_hashentry = sp_mapdb_search_hashentry(key, ruleid, rule_type);
+	cur_hashentry = sp_mapdb_search_hashentry(key, ruleid, rule_type, tuple);
 	if (!cur_hashentry) {
-		spin_unlock(&sp_mapdb_lock);
-		DEBUG_WARN("there is no such rule as ruleID = %d, rule_type: %d\n", ruleid, rule_type);
+		spin_unlock_bh(&sp_mapdb_lock);
+		DEBUG_WARN("there is no such rule as key = %d, ruleID = %d, rule_type: %d\n", key, ruleid, rule_type);
 		return SP_MAPDB_UPDATE_RESULT_ERR_RULENOEXIST;
 	}
 
 	tobedeleted = cur_hashentry->rule_node;
+
+	/* Populate delete message before deleting the rule node */
+	del_msg.ip_version = tobedeleted->rule.inner.ip_version_type;
+	del_msg.src_port = tobedeleted->rule.inner.src_port;
+	del_msg.dst_port = tobedeleted->rule.inner.dst_port;
+	del_msg.protocol = tobedeleted->rule.inner.protocol_number;
+
+	if (del_msg.ip_version == 4) {
+		del_msg.src_ip[0] = tobedeleted->rule.inner.src_ipv4_addr;
+		del_msg.dst_ip[0] = tobedeleted->rule.inner.dst_ipv4_addr;
+	} else if (del_msg.ip_version == 6) {
+		memcpy(del_msg.src_ip, tobedeleted->rule.inner.src_ipv6_addr, sizeof(uint32_t) * 4);
+		memcpy(del_msg.dst_ip, tobedeleted->rule.inner.dst_ipv6_addr, sizeof(uint32_t) * 4);
+	}
+
+	DEBUG_INFO(" Size of sp_del_sync_msg: %zu \
+			src ip: %pI4, dest ip: %pI4, \
+			protocol: %u, ip version: %u, src_port: %u, dst_port: %u",
+			sizeof(struct sp_del_sync_msg), &del_msg.src_ip[0], &del_msg.dst_ip[0], del_msg.protocol, del_msg.ip_version, del_msg.src_port, del_msg.dst_port);
+
 	list_del_rcu(&tobedeleted->rule_list);
 	hash_del(&cur_hashentry->hlist);
 	kfree(cur_hashentry);
 	rule_manager.rule_count--;
-	spin_unlock(&sp_mapdb_lock);
+	spin_unlock_bh(&sp_mapdb_lock);
 
 	DEBUG_INFO("Successful deletion\n");
 
@@ -687,6 +820,12 @@ static sp_mapdb_update_result_t sp_mapdb_rule_delete(uint32_t ruleid, uint32_t k
 	if (rule_type != SP_RULE_TYPE_SAWF_IFLI) {
 		sp_mapdb_notifiers_call(&tobedeleted->rule, SP_MAPDB_REMOVE_RULE);
 	}
+
+	/*
+	 * Notify user space application about SPM rule deletion
+	 */
+	DEBUG_INFO("Sending delete notification to user space application. \n");
+	sp_mapdb_delete_notify_sync(&del_msg);
 
 	call_rcu(&tobedeleted->rcu, sp_rule_destroy_rcu);
 
@@ -996,6 +1135,93 @@ set_output:
 }
 
 /*
+ * sp_mapdb_rm_sync
+ *	Syncs a flow's prioritization information with RM
+ */
+int sp_mapdb_rm_sync(struct sp_rm_sync_msg *rm_msg)
+{
+	struct sk_buff *msg;
+	void *hdr;
+
+	if (!sync_msg_net || !port_id) {
+		DEBUG_WARN("Sync socket is not setup\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * An atomic message must be allocated as this funciton
+	 * may be called from an interupt context
+	 */
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
+	if (!msg) {
+		DEBUG_WARN("Failed to allocate netlink message to accomodate rule\n");
+		return -ENOMEM;
+	}
+
+	hdr = genlmsg_put(msg, port_id, 0,
+			&sp_genl_family, 0, SPM_CMD_RULE_ACTION);
+
+	if (!hdr) {
+		DEBUG_WARN("Failed to put hdr in netlink buffer\n");
+		nlmsg_free(msg);
+		return -ENOMEM;
+	}
+
+	nla_put(msg, SP_GNL_ATTR_RM_SYNC_MSG, sizeof(struct sp_rm_sync_msg), rm_msg);
+
+	return genlmsg_unicast(sync_msg_net, msg, port_id);
+}
+
+EXPORT_SYMBOL(sp_mapdb_rm_sync);
+
+
+/*
+ * sp_mapdb_delete_notify_sync
+ *	Sends a multicast netlink message to user-space apps
+ *	notifying about a rule deletion.
+ */
+int sp_mapdb_delete_notify_sync(struct sp_del_sync_msg *del_msg)
+{
+	struct sk_buff *msg;
+	void *hdr;
+
+	if (!sync_msg_net) {
+		DEBUG_WARN("Delete notify sync socket is not setup\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * An atomic message must be allocated as this funciton
+	 * may be called from an interrupt context
+	 */
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
+	if (!msg) {
+		DEBUG_WARN("Failed to allocate netlink message for delete notification\n");
+		return -ENOMEM;
+	}
+
+	hdr = genlmsg_put(msg, 0, 0,
+			&sp_genl_family, 0, SPM_CMD_RULE_ACTION); // Using a new command ID
+
+	if (!hdr) {
+		DEBUG_WARN("Failed to put hdr in netlink buffer for delete notification\n");
+		nlmsg_free(msg);
+		return -ENOMEM;
+	}
+
+	if (nla_put(msg, SP_GNL_ATTR_DELETE_SYNC_MSG, sizeof(struct sp_del_sync_msg), del_msg)) {
+		DEBUG_WARN("Failed to put delete sync message in netlink buffer\n");
+		genlmsg_cancel(msg, hdr);
+		nlmsg_free(msg);
+		return -EMSGSIZE;
+	}
+
+	genlmsg_end(msg, hdr);
+	DEBUG_WARN("Sending multicast message to user space\n");
+	return genlmsg_multicast(&sp_genl_family, msg, 0, SPM_MCGRP_DELETE, GFP_ATOMIC);
+}
+
+/*
  * sp_mapdb_enum_to_char_ae_type()
  * 	Convert ae type enum to string ae type.
  */
@@ -1025,16 +1251,24 @@ static const char* sp_mapdb_enum_to_char_ae_type(enum sp_rule_ae_type ae_type)
 /*
  * sp_mapdb_ifli_rule_flush()
  * 	Clear the rule and frees the memory allocated for rule type IFLI.
- *
- * It will enumerate all the precedence in the prec_map,
- * and start from the head node in each of the precedence in the prec_map,
- * and free all the rule nodes
- * as well as the associated hashentry, with
- * these precedence.
  */
-void sp_mapdb_ifli_rule_flush(uint32_t rule_id, uint32_t key)
+void sp_mapdb_ifli_rule_flush(struct sp_rule_del_params *del_params)
 {
-	sp_mapdb_rule_delete(rule_id, key, SP_RULE_TYPE_SAWF_IFLI);
+	struct sp_mapdb_5tuple tuple = {0};
+
+	tuple.src_port = del_params->src_port;
+	tuple.dest_port = del_params->dest_port;
+	tuple.protocol = del_params->protocol;
+
+	if (del_params->ip_version == 4) {
+		tuple.src_addr[0] = del_params->src_ip[0];
+		tuple.dest_addr[0] = del_params->dest_ip[0];
+	} else if (del_params->ip_version == 6) {
+		memcpy(tuple.src_addr, del_params->src_ip, sizeof(uint32_t) * 4);
+		memcpy(tuple.dest_addr, del_params->dest_ip, sizeof(uint32_t) * 4);
+	}
+
+	sp_mapdb_rule_delete(del_params->rule_id, del_params->key, SP_RULE_TYPE_SAWF_IFLI, &tuple);
 }
 EXPORT_SYMBOL(sp_mapdb_ifli_rule_flush);
 
@@ -1057,9 +1291,9 @@ void sp_mapdb_ruletable_flush(void)
 	struct hlist_node *hlist_tmp;
 	int hash_bkt;
 
-	spin_lock(&sp_mapdb_lock);
+	spin_lock_bh(&sp_mapdb_lock);
 	if (rule_manager.rule_count == 0) {
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
 		DEBUG_WARN("The rule table is already empty. No action needed. \n");
 		return;
 	}
@@ -1084,7 +1318,7 @@ void sp_mapdb_ruletable_flush(void)
 		kfree(hashentry_iter);
 	}
 	rule_manager.rule_count = 0;
-	spin_unlock(&sp_mapdb_lock);
+	spin_unlock_bh(&sp_mapdb_lock);
 }
 EXPORT_SYMBOL(sp_mapdb_ruletable_flush);
 
@@ -1102,6 +1336,8 @@ EXPORT_SYMBOL(sp_mapdb_ruletable_flush);
 sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule)
 {
 	sp_mapdb_update_result_t error_code = 0;
+	struct sp_mapdb_5tuple tuple = {0};
+	uint32_t key;
 
 	if (!newrule) {
 		return SP_MAPDB_UPDATE_RESULT_ERR_NEWRULE_NULLPTR;
@@ -1114,7 +1350,13 @@ sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule)
 
 	switch (newrule->cmd) {
 	case SP_MAPDB_ADD_REMOVE_FILTER_DELETE:
-		error_code = sp_mapdb_rule_delete(newrule->id, newrule->id, newrule->classifier_type);
+		if (newrule->classifier_type == SP_RULE_TYPE_SAWF_IFLI) {
+			sp_mapdb_get_tuple(newrule, &tuple);
+			key = sp_mapdb_get_hash(&tuple);
+			error_code = sp_mapdb_rule_delete(newrule->id, key, newrule->classifier_type, &tuple);
+		} else {
+			error_code = sp_mapdb_rule_delete(newrule->id, newrule->id, newrule->classifier_type, NULL);
+		}
 		break;
 
 	case SP_MAPDB_ADD_REMOVE_FILTER_ADD:
@@ -1132,6 +1374,108 @@ sp_mapdb_update_result_t sp_mapdb_rule_update(struct sp_rule *newrule)
 	return error_code;
 }
 EXPORT_SYMBOL(sp_mapdb_rule_update);
+
+/*
+ * sp_mapdb_enum_radio_band_to_str()
+ * 	Convert a sp_rule_vdev_band enum represented band to string
+ */
+static inline char *sp_mapdb_enum_radio_band_to_str(enum sp_mapdb_radio_band band)
+{
+	switch (band) {
+	case SP_MAPDB_RADIO_BAND_INVALID:
+		break;
+	case SP_MAPDB_RADIO_BAND_2G:
+		return "2G";
+	case SP_MAPDB_RADIO_BAND_5G:
+		return "5G";
+	case SP_MAPDB_RADIO_BAND_5GH:
+		return "5GH";
+	case SP_MAPDB_RADIO_BAND_5GL:
+		return "5GL";
+	case SP_MAPDB_RADIO_BAND_6G:
+		return "6G";
+	}
+
+	return NULL;
+}
+
+/*
+ * sp_mapdb_enum_radio_bw_to_str()
+ * 	Convert a sp_rule_vdev_band enum represented band to string
+ */
+static inline char *sp_mapdb_enum_radio_bw_to_str(enum sp_mapdb_radio_bandwidth bandwidth)
+{
+	switch (bandwidth) {
+	case SP_MAPDB_RADIO_BANDWIDTH_INVALID:
+		break;
+	case SP_MAPDB_RADIO_BANDWIDTH_20:
+		return "20";
+	case SP_MAPDB_RADIO_BANDWIDTH_40:
+		return "40";
+	case SP_MAPDB_RADIO_BANDWIDTH_80:
+		return "80";
+	case SP_MAPDB_RADIO_BANDWIDTH_160:
+		return "160";
+	case SP_MAPDB_RADIO_BANDWIDTH_80_80:
+		return "80_80";
+	case SP_MAPDB_RADIO_BANDWIDTH_320:
+		return "320";
+	}
+
+	return NULL;
+}
+
+/*
+ * sp_mapdb_rule_print_input_wlan_params()
+ * 	Print the input wlan parameters of the current rule.
+ */
+static inline void sp_mapdb_rule_print_input_wlan_params(struct sp_mapdb_rule_node *curnode)
+{
+	int i;
+
+	printk("WLAN params:\n");
+	printk("transmitter_mac: %pM, receiver_mac: %pM", curnode->rule.inner.transmitter_mac, curnode->rule.inner.receiver_mac);
+	if (curnode->rule.inner.band_mode == 1) {
+		printk("band_mode: %s\n", SP_MAPDB_RADIO_FLAG_AND);
+	} else {
+		printk("band_mode: %s\n", SP_MAPDB_RADIO_FLAG_OR);
+	}
+
+	printk("band: ");
+	for (i = 0; i < SP_RULE_MAX_VDEV_PER_ML; i++) {
+		if (curnode->rule.inner.radio_band[i] == SP_RULE_BAND_VALID) {
+			printk("%s \n", sp_mapdb_enum_radio_band_to_str(i));
+		}
+	}
+
+	if (curnode->rule.inner.channel_mode == 1) {
+		printk("channel_mode: %s\n", SP_MAPDB_RADIO_FLAG_AND);
+	} else {
+		printk("channel_mode: %s\n", SP_MAPDB_RADIO_FLAG_OR);
+	}
+
+	printk("channel: ");
+	for (i = 0; i < SP_RULE_MAX_VDEV_PER_ML; i++) {
+		printk("%d ", curnode->rule.inner.radio_channel[i]);
+	}
+
+	if (curnode->rule.inner.bandwidth_mode == 1) {
+		printk("bandwidth_mode: %s\n", SP_MAPDB_RADIO_FLAG_AND);
+	} else {
+		printk("bandwidth_mode: %s\n", SP_MAPDB_RADIO_FLAG_OR);
+	}
+
+	printk("bandwidth: ");
+	for (i = 0; i < SP_RULE_MAX_VDEV_PER_ML; i++) {
+		printk("%s ", sp_mapdb_enum_radio_bw_to_str(curnode->rule.inner.radio_bandwidth[i]));
+	}
+
+	printk("ssid: %s", curnode->rule.inner.ssid);
+	printk("ssid_len: 0x%x", curnode->rule.inner.ssid_len);
+	printk("bssid: %pM", curnode->rule.inner.bssid);
+	printk("access_class: 0x%x", curnode->rule.inner.access_class);
+	printk("priority: 0x%x", curnode->rule.inner.priority);
+}
 
 /*
  * sp_mapdb_rule_print_input_params()
@@ -1162,6 +1506,13 @@ static inline void sp_mapdb_rule_print_input_params(struct sp_mapdb_rule_node *c
 			curnode->rule.inner.src_port_range_end, curnode->rule.inner.dst_port_range_start,
 			curnode->rule.inner.dst_port_range_end);
 	printk("Source Interface: %s Destination Interface: %s \n", curnode->rule.inner.src_iface, curnode->rule.inner.dst_iface);
+
+	/*
+	 * print the wlan specific input parameters of the current rule
+	 */
+	if (curnode->rule.inner.wlan_flow == 1) {
+		sp_mapdb_rule_print_input_wlan_params(curnode);
+	}
 }
 
 /*
@@ -1170,24 +1521,23 @@ static inline void sp_mapdb_rule_print_input_params(struct sp_mapdb_rule_node *c
  */
 void sp_mapdb_ruletable_print(void)
 {
-	int i;
-	struct sp_mapdb_rule_node *curnode = NULL;
+	struct sp_mapdb_rule_id_hashentry *hashentry_iter;
+	struct hlist_node *hlist_tmp;
+	int hash_bkt;
 
 	rcu_read_lock();
 	printk("\n====Rule table start====\nTotal rule count = %d\n", rule_manager.rule_count);
-	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
-		if (!list_empty(&(rule_manager.prec_map[i].rule_list))) {
-			list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
-				printk("\nid: %d, classifier_type: %d, precedence: %d\n", curnode->rule.id, curnode->rule.classifier_type, curnode->rule.rule_precedence);
-				sp_mapdb_rule_print_input_params(curnode);
-				printk("\n........OUTPUT PARAMS........\n");
-				printk("dscp_remark: %d, vlan_pcp_remark: %d\n", curnode->rule.inner.dscp_remark, curnode->rule.inner.vlan_pcp_remark);
-				printk("output(priority): %d, service_class_id: %d\n", curnode->rule.inner.rule_output, curnode->rule.inner.service_class_id);
-				printk("MSCS TID BITMAP: %x: Priority Limit Value: %x\n", curnode->rule.inner.mscs_tid_bitmap, curnode->rule.inner.priority_limit);
-				printk("acceleration engine type: %s\n", sp_mapdb_enum_to_char_ae_type(curnode->rule.inner.ae_type));
-			}
-		}
+	hash_for_each_safe(rule_manager.rule_hashmap, hash_bkt, hlist_tmp, hashentry_iter, hlist) {
+		printk("\nid: %d, classifier_type: %s, precedence: %d\n", hashentry_iter->rule_node->rule.id, sp_mapdb_get_classifier_type_str(hashentry_iter->rule_node->rule.classifier_type), hashentry_iter->rule_node->rule.rule_precedence);
+		sp_mapdb_rule_print_input_params(hashentry_iter->rule_node);
+		printk("\n........OUTPUT PARAMS........\n");
+		printk("dscp_remark: %d, vlan_pcp_remark: %d\n", hashentry_iter->rule_node->rule.inner.dscp_remark, hashentry_iter->rule_node->rule.inner.vlan_pcp_remark);
+		printk("output(priority): %d, service_class_id: %d\n ipv4_frag_thresh: %d\n", hashentry_iter->rule_node->rule.inner.rule_output, hashentry_iter->rule_node->rule.inner.service_class_id, hashentry_iter->rule_node->rule.inner.ipv4_frag_thresh);
+		printk("MSCS TID BITMAP: %x: Priority Limit Value: %x\n", hashentry_iter->rule_node->rule.inner.mscs_tid_bitmap, hashentry_iter->rule_node->rule.inner.priority_limit);
+		printk("acceleration engine type: %s\n", sp_mapdb_enum_to_char_ae_type(hashentry_iter->rule_node->rule.inner.ae_type));
 	}
+
+
 	rcu_read_unlock();
 	printk("====Rule table ends====\n");
 }
@@ -1258,6 +1608,45 @@ void sp_mapdb_get_wlan_latency_params(struct sk_buff *skb,
 EXPORT_SYMBOL(sp_mapdb_get_wlan_latency_params);
 
 /*
+ * sp_mapdb_rule_query_wlan_params()
+ * 	API to query WLAN parameters with WLAN driver through plugin
+ */
+static inline bool sp_mapdb_rule_query_wlan_params(struct sp_rule_wifi_plugin_metadata *wifi_metadata, struct sp_mapdb_rule_node *curnode, struct sp_rule_input_params *params)
+{
+	ether_addr_copy(wifi_metadata->dest_mac, params->dst.mac);
+	ether_addr_copy(wifi_metadata->src_mac, params->src.mac);
+	wifi_metadata->band_mode = curnode->rule.inner.band_mode;
+	wifi_metadata->channel_mode = curnode->rule.inner.channel_mode;
+	wifi_metadata->bandwidth_mode = curnode->rule.inner.bandwidth_mode;
+	if (curnode->rule.inner.valid_ac) {
+		wifi_metadata->valid_flags |= SP_RULE_AC_VALID;
+		wifi_metadata->access_class = curnode->rule.inner.access_class;
+	}
+
+	wifi_metadata->priority = curnode->rule.inner.priority;
+	wifi_metadata->ssid_len = curnode->rule.inner.ssid_len;
+	memcpy(wifi_metadata->ssid, curnode->rule.inner.ssid, strlen(curnode->rule.inner.ssid) + 1);
+	ether_addr_copy(wifi_metadata->ta_mac, curnode->rule.inner.transmitter_mac);
+	ether_addr_copy(wifi_metadata->ra_mac, curnode->rule.inner.receiver_mac);
+	ether_addr_copy(wifi_metadata->bssid, curnode->rule.inner.bssid);
+	memcpy(wifi_metadata->radio_band, curnode->rule.inner.radio_band, sizeof(wifi_metadata->radio_band));
+	memcpy(wifi_metadata->radio_chan, curnode->rule.inner.radio_channel, sizeof(wifi_metadata->radio_chan));
+	memcpy(wifi_metadata->radio_bw, curnode->rule.inner.radio_bandwidth, sizeof(wifi_metadata->radio_bw));
+
+	/*
+	 * query metadata with WLAN through plugin
+	 */
+	if (!emesh_sp_wifi.sawf_rule_query_callback(wifi_metadata)) {
+
+		DEBUG_INFO("WLAN rule match failed for rule_id : %d\n", curnode->rule.id);
+		return false;
+	}
+
+	DEBUG_INFO("\nMatched with rule_id : %d\n", curnode->rule.id);
+	return true;
+}
+
+/*
  * sp_mapdb_rule_apply_sawf()
  * 	Assign the desired PCP value into skb->priority,
  * 	return sp_rule_output_params structure
@@ -1275,6 +1664,16 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 	uint32_t rule_id = SP_RULE_INVALID_RULE_ID;
 	uint8_t sawf_rule_type = SP_RULE_TYPE_SAWF_INVALID;
 	enum sp_rule_ae_type ae_type = SP_RULE_AE_TYPE_DEFAULT;
+	uint16_t ipv4_frag_thresh = SP_RULE_INVALID_IPV4_FRAG_THRESH;
+	struct sp_rule_wifi_plugin_metadata wifi_metadata = {0};
+	struct net_device *dest_dev, *src_dev;
+
+	dest_dev = params->dest_dev;
+	src_dev = params->src_dev;
+
+	if (!dest_dev) {
+		goto set_output;
+	}
 
 	rcu_read_lock();
 	if (rule_manager.rule_count == 0) {
@@ -1287,6 +1686,23 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 	}
 
 	rcu_read_unlock();
+	wifi_metadata.valid_flags = 0;
+	wifi_metadata.dest_dev = dest_dev;
+	wifi_metadata.src_dev = src_dev;
+	wifi_metadata.skb_prio = skb->priority;
+
+	/*
+	 * fill pcp if valid
+	 */
+	if (params->vlan_tci != SP_RULE_INVALID_VLAN_TCI) {
+		wifi_metadata.pcp = (uint8_t)((params->vlan_tci & VLAN_PRIO_MASK) >> VLAN_PRIO_SHIFT);
+		wifi_metadata.valid_flags |= SP_RULE_PCP_VALID;
+	}
+
+	/*
+	 * fill dscp
+	 */
+	wifi_metadata.dscp = params->dscp;
 
 	/*
 	 * The iteration loop goes backward because
@@ -1297,16 +1713,59 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
 			DEBUG_INFO("Matching with rule id = %d (sawf case)\n", curnode->rule.id);
 			if (curnode->rule.classifier_type == SP_RULE_TYPE_SAWF) {
-				if (sp_mapdb_rule_match_sawf(&curnode->rule, params)) {
-					output = curnode->rule.inner.rule_output;
-					dscp_remark = curnode->rule.inner.dscp_remark;
-					vlan_pcp_remark = curnode->rule.inner.vlan_pcp_remark;
-					service_class_id = curnode->rule.inner.service_class_id;
-					rule_id = curnode->rule.id;
-					ae_type = curnode->rule.inner.ae_type;
-					sawf_rule_type = SP_RULE_TYPE_SAWF;
-					goto set_output;
+				if (curnode->rule.inner.wlan_flow) {
+
+					/*
+					 * Validate the WLAN parameters if sawf rule query has been registered
+					 */
+					if (emesh_sp_wifi.sawf_rule_query_callback) {
+
+						/*
+						 * current SPM rule has WLAN params
+						 * 	validate with WLAN if they are valid or not
+						 */
+						if (!sp_mapdb_rule_query_wlan_params(&wifi_metadata, curnode, params)) {
+
+							/*
+							 * Current WLAN rules are not valid
+							 * 	check for next rule.
+							 */
+							continue;
+						}
+
+						/*
+						 * Current WLAN rules are valid
+						 * 	Fill the output parameters
+						 */
+						goto fill_output;
+					}
+
+					/*
+					 * Callback is not registered.
+					 * check next rule.
+					 */
+					continue;
 				}
+
+				/*
+				 * Current rule is not having any WLAN parameters or
+				 * sawf rule query callback has not registered
+				 * 	Continue with sp_mapdb_rule_match_sawf().
+				 */
+				if (!sp_mapdb_rule_match_sawf(&curnode->rule, params)) {
+					continue;
+				}
+
+fill_output:
+				output = curnode->rule.inner.rule_output;
+				dscp_remark = curnode->rule.inner.dscp_remark;
+				vlan_pcp_remark = curnode->rule.inner.vlan_pcp_remark;
+				service_class_id = curnode->rule.inner.service_class_id;
+				ipv4_frag_thresh = curnode->rule.inner.ipv4_frag_thresh;
+				rule_id = curnode->rule.id;
+				ae_type = curnode->rule.inner.ae_type;
+				sawf_rule_type = SP_RULE_TYPE_SAWF;
+				goto set_output;
 			}
 		}
 	}
@@ -1345,6 +1804,7 @@ void sp_mapdb_rule_apply_sawf(struct sk_buff *skb, struct sp_rule_input_params *
 
 set_output:
 	rule_output->service_class_id = service_class_id;
+	rule_output->ipv4_frag_thresh = ipv4_frag_thresh;
 	rule_output->rule_id = rule_id;
 	rule_output->priority = output;
 	rule_output->dscp_remark = dscp_remark;
@@ -1489,6 +1949,214 @@ put_failure:
 }
 
 /*
+ * sp_mapdb_str_radio_band_to_enum()
+ * 	Convert a string represented band to sp_rule_vdev_band enum
+ */
+static inline enum sp_mapdb_radio_band sp_mapdb_str_radio_band_to_idx(char *str)
+{
+	if (!(strcasecmp(str, "2G"))) {
+		return SP_MAPDB_RADIO_BAND_2G;
+	}
+
+	if (!(strcasecmp(str, "5G"))) {
+		return SP_MAPDB_RADIO_BAND_5G;
+	}
+
+	if (!(strcasecmp(str, "5GH"))) {
+		return SP_MAPDB_RADIO_BAND_5GH;
+	}
+
+	if (!(strcasecmp(str, "5GL"))) {
+		return SP_MAPDB_RADIO_BAND_5GL;
+	}
+
+	if (!(strcasecmp(str, "6G"))) {
+		return SP_MAPDB_RADIO_BAND_6G;
+	}
+
+	return SP_MAPDB_RADIO_BAND_INVALID;
+}
+
+/*
+ * sp_mapdb_str_radio_bw_to_enum()
+ * 	Convert a string represented bandwidth to sp_rule_vdev_band enum
+ */
+static inline enum sp_mapdb_radio_bandwidth sp_mapdb_str_radio_bw_to_enum(char *str)
+{
+	if (!(strcasecmp(str, "20"))) {
+		return SP_MAPDB_RADIO_BANDWIDTH_20;
+	}
+
+	if (!(strcasecmp(str, "40"))) {
+		return SP_MAPDB_RADIO_BANDWIDTH_40;
+	}
+
+	if (!(strcasecmp(str, "80"))) {
+		return SP_MAPDB_RADIO_BANDWIDTH_80;
+	}
+
+	if (!(strcasecmp(str, "160"))) {
+		return SP_MAPDB_RADIO_BANDWIDTH_160;
+	}
+
+	if (!(strcasecmp(str, "80_80"))) {
+		return SP_MAPDB_RADIO_BANDWIDTH_80_80;
+	}
+
+	if (!(strcasecmp(str, "320"))) {
+		return SP_MAPDB_RADIO_BANDWIDTH_320;
+	}
+
+	return SP_MAPDB_RADIO_BANDWIDTH_INVALID;
+}
+
+/*
+ * sp_mapdb_construct_radio_info_map()
+ * 	Store the enum converted radio info to sp rule
+ */
+static inline bool sp_mapdb_construct_radio_info_map(struct sp_rule_radio_info *radio, struct sp_rule_wifi_plugin_metadata *wifi_metadata)
+{
+	int t;
+	enum sp_mapdb_radio_band idx;
+	enum sp_mapdb_radio_bandwidth bw;
+
+	for (t = 1; t < SP_RULE_MAX_VDEV_PER_ML; t++) {
+		idx = sp_mapdb_str_radio_band_to_idx(radio->radio_band[t]);
+		wifi_metadata->radio_band[idx] = SP_RULE_BAND_VALID;
+		bw = sp_mapdb_str_radio_bw_to_enum(radio->radio_bandwidth[t]);
+		wifi_metadata->radio_bw[idx] = bw;
+		wifi_metadata->radio_chan[idx] = radio->radio_channel[t];
+	}
+
+	return true;
+}
+
+/*
+ * sp_mapdb_parse_wlan_rule()
+ * 	Extract wlan parameters from netlink message.
+ */
+static inline bool sp_mapdb_parse_wlan_rule(struct genl_info *info, struct sp_rule *to_sawf_sp)
+{
+	int i, rem;
+	struct sp_rule_radio_info radio = {0};
+	struct sp_rule_wifi_plugin_metadata wifi_metadata = {0};
+	struct nlattr *wlan_params = NULL, *attr = info->attrs[SP_GNL_ATTR_WLAN_FLOW];
+
+	nla_for_each_nested(wlan_params, attr, rem) {
+		switch(nla_type(wlan_params)) {
+		case SP_GNL_ATTR_TRANSMITTER_MAC:
+			memcpy(wifi_metadata.ta_mac, nla_data(wlan_params), ETH_ALEN);
+			break;
+		case SP_GNL_ATTR_RECEIVER_MAC:
+			memcpy(wifi_metadata.ra_mac, nla_data(wlan_params), ETH_ALEN);
+			break;
+		case SP_GNL_ATTR_RADIO_BAND:
+			memcpy(radio.radio_band, nla_data(wlan_params), sizeof(radio.radio_band));
+			break;
+		case SP_GNL_ATTR_RADIO_CHANNEL:
+			memcpy(radio.radio_channel, nla_data(wlan_params), sizeof(radio.radio_channel));
+			break;
+		case SP_GNL_ATTR_RADIO_BANDWIDTH:
+			memcpy(radio.radio_bandwidth, nla_data(wlan_params), sizeof(radio.radio_bandwidth));
+			break;
+		case SP_GNL_ATTR_BAND_MODE:
+			wifi_metadata.band_mode = nla_get_u8(wlan_params);
+			break;
+		case SP_GNL_ATTR_CHANNEL_MODE:
+			wifi_metadata.channel_mode = nla_get_u8(wlan_params);
+			break;
+		case SP_GNL_ATTR_BANDWIDTH_MODE:
+			wifi_metadata.bandwidth_mode = nla_get_u8(wlan_params);
+			break;
+		case SP_GNL_ATTR_BSSID:
+			memcpy(wifi_metadata.bssid, nla_data(wlan_params), ETH_ALEN);
+			break;
+		case SP_GNL_ATTR_SSID_LEN:
+			wifi_metadata.ssid_len = nla_get_u8(wlan_params);
+			break;
+		case SP_GNL_ATTR_SSID:
+			memcpy(wifi_metadata.ssid, nla_data(wlan_params), sizeof(wifi_metadata.ssid));
+			break;
+		case SP_GNL_ATTR_ACCESS_CLASS:
+			wifi_metadata.access_class = nla_get_u8(wlan_params);
+			to_sawf_sp->inner.valid_ac = true;
+			wifi_metadata.valid_flags |= SP_RULE_AC_VALID;
+			break;
+		case SP_GNL_ATTR_PRIORITY:
+			wifi_metadata.priority = nla_get_u8(wlan_params);
+		}
+	}
+
+	sp_mapdb_construct_radio_info_map(&radio, &wifi_metadata);
+
+	if (emesh_sp_wifi.sawf_rule_validate_callback) {
+
+		/*
+		 * Plugin callback is registered
+		 */
+		if (!emesh_sp_wifi.sawf_rule_validate_callback(&wifi_metadata)) {
+			DEBUG_ERROR("WLAN params are not valid\n");
+			return false;
+		}
+	} else {
+		DEBUG_ERROR("SAWF rule validate callback not registered with Wi-Fi plugin\n");
+		return false;
+	}
+
+	/*
+	 * The rule has valid WLAN params.
+	 * 	Add them to SPM.
+	 */
+	to_sawf_sp->inner.wlan_flow = 1;
+	to_sawf_sp->inner.band_mode = wifi_metadata.band_mode;
+	to_sawf_sp->inner.channel_mode = wifi_metadata.channel_mode;
+	to_sawf_sp->inner.bandwidth_mode = wifi_metadata.bandwidth_mode;
+	to_sawf_sp->inner.access_class = wifi_metadata.access_class;
+	to_sawf_sp->inner.priority = wifi_metadata.priority;
+	to_sawf_sp->inner.ssid_len = wifi_metadata.ssid_len;
+	memcpy(to_sawf_sp->inner.ssid, wifi_metadata.ssid, strlen(wifi_metadata.ssid) + 1);
+	ether_addr_copy(to_sawf_sp->inner.transmitter_mac, wifi_metadata.ta_mac);
+	ether_addr_copy(to_sawf_sp->inner.receiver_mac, wifi_metadata.ra_mac);
+	ether_addr_copy(to_sawf_sp->inner.bssid, wifi_metadata.bssid);
+	memcpy(to_sawf_sp->inner.radio_band, wifi_metadata.radio_band, sizeof(wifi_metadata.radio_band));
+	memcpy(to_sawf_sp->inner.radio_channel, wifi_metadata.radio_chan, sizeof(wifi_metadata.radio_chan));
+	memcpy(to_sawf_sp->inner.radio_bandwidth, wifi_metadata.radio_bw, sizeof(wifi_metadata.radio_bw));
+
+	/*
+	 * dump the wlan params
+	 */
+	DEBUG_INFO("WLAN_flow: %d\n", to_sawf_sp->inner.wlan_flow);
+	DEBUG_INFO("transmitter_mac : %pM\n", to_sawf_sp->inner.transmitter_mac);
+	DEBUG_INFO("receiver_mac : %pM\n", to_sawf_sp->inner.receiver_mac);
+	DEBUG_INFO("radio_band:");
+	for (i = 1; i < SP_RULE_MAX_VDEV_PER_ML; ++i) {
+		DEBUG_INFO("\n%s ", radio.radio_band[i]);
+	}
+
+	DEBUG_INFO("radio_channel: ");
+	for (i = 1; i < SP_RULE_MAX_VDEV_PER_ML; ++i) {
+		DEBUG_INFO("\n%d ", radio.radio_channel[i]);
+	}
+
+	DEBUG_INFO("\n");
+	DEBUG_INFO("radio_bandwidth:");
+	for (i = 1; i < SP_RULE_MAX_VDEV_PER_ML; ++i) {
+		DEBUG_INFO("\n%s ", radio.radio_bandwidth[i]);
+	}
+
+	DEBUG_INFO("band_mode: %d\n", wifi_metadata.band_mode);
+	DEBUG_INFO("channel_mode: %d\n", wifi_metadata.channel_mode);
+	DEBUG_INFO("bandwidth_mode: %d\n", wifi_metadata.bandwidth_mode);
+	DEBUG_INFO("bssid: %pM\n", wifi_metadata.bssid);
+	DEBUG_INFO("ssid_len: %d\n", wifi_metadata.ssid_len);
+	DEBUG_INFO("ssid: %s\n", wifi_metadata.ssid);
+	DEBUG_INFO("access_class: %d\n", wifi_metadata.access_class);
+	DEBUG_INFO("priority: %d\n", wifi_metadata.priority);
+
+	return true;
+}
+
+/*
  * sp_mapdb_rule_receive()
  * 	Handles a netlink message from userspace for rule add/delete/update
  */
@@ -1513,6 +2181,7 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	to_sawf_sp.inner.dscp_remark = SP_RULE_INVALID_DSCP_REMARK;
 	to_sawf_sp.inner.vlan_pcp_remark = SP_RULE_INVALID_VLAN_PCP_REMARK;
 	to_sawf_sp.inner.mscs_tid_bitmap = SP_RULE_INVALID_MSCS_TID_BITMAP;
+	to_sawf_sp.inner.ipv4_frag_thresh = SP_RULE_INVALID_IPV4_FRAG_THRESH;
 
 	rcu_read_lock();
 	DEBUG_INFO("Recieved rule...\n");
@@ -1557,6 +2226,11 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 	if (info->attrs[SP_GNL_ATTR_SERVICE_CLASS_ID]) {
 		to_sawf_sp.inner.service_class_id = nla_get_u8(info->attrs[SP_GNL_ATTR_SERVICE_CLASS_ID]);
 		DEBUG_INFO("Service_class_id: 0x%x\n", to_sawf_sp.inner.service_class_id);
+	}
+
+	if (info->attrs[SP_GNL_ATTR_IPV4_FRAG_THRESH]) {
+		to_sawf_sp.inner.ipv4_frag_thresh = nla_get_u16(info->attrs[SP_GNL_ATTR_IPV4_FRAG_THRESH]);
+		DEBUG_INFO("IPv4_frag_thresh: %d\n", to_sawf_sp.inner.ipv4_frag_thresh);
 	}
 
 	if (info->attrs[SP_GNL_ATTR_SRC_PORT]) {
@@ -1842,6 +2516,15 @@ static inline int sp_mapdb_rule_receive(struct sk_buff *skb, struct genl_info *i
 
 	DEBUG_INFO("classifier type: %d\n", to_sawf_sp.classifier_type);
 
+	if (info->attrs[SP_GNL_ATTR_WLAN_FLOW]) {
+		if (!sp_mapdb_parse_wlan_rule(info, &to_sawf_sp)) {
+			rcu_read_unlock();
+			DEBUG_ERROR("Invalid input for WLAN Params for rule_id : %d\n", to_sawf_sp.id);
+			rule_result = SP_MAPDB_UPDATE_RESULT_ERR_INVALIDENTRY;
+			goto status_notify;
+		}
+	}
+
 	rcu_read_unlock();
 
 	/*
@@ -1862,6 +2545,63 @@ status_notify:
 
 	genlmsg_end(msg, hdr);
 	return genlmsg_unicast(genl_info_net(info), msg, info->snd_portid);
+}
+
+/*
+ * sp_mapdb_parse_radio_info()
+ * 	API converting the radio info
+ */
+static inline void sp_mapdb_parse_radio_info(struct sp_rule_radio_info *radio, struct sp_rule *rule)
+{
+	char *band, *bw;
+	int t;
+
+	for (t = 1; t < SP_RULE_MAX_VDEV_PER_ML; t++) {
+		if (rule->inner.radio_band[t] == SP_RULE_BAND_VALID) {
+			band = sp_mapdb_enum_radio_band_to_str(t);
+			if (band) {
+				memcpy(radio->radio_band[t], band, sizeof(radio->radio_band[t]));
+			}
+
+			bw = sp_mapdb_enum_radio_bw_to_str(rule->inner.radio_bandwidth[t]);
+			if (bw) {
+				memcpy(radio->radio_bandwidth[t], bw, sizeof(radio->radio_bandwidth[t]));
+			}
+
+		}
+	}
+}
+
+/*
+ * sp_mapdb_wlan_rule_query()
+ * 	API to fill WLAN params to netlink msg
+ * 	in the event of rule query from user space
+ */
+static inline int sp_mapdb_wlan_rule_query(struct sk_buff *msg, struct sp_rule *rule)
+{
+	struct sp_rule_radio_info radio = {0};
+	char ssid[WLAN_SSID_MAX_LEN];
+
+	memcpy(ssid, rule->inner.ssid, sizeof(rule->inner.ssid));
+	sp_mapdb_parse_radio_info(&radio, rule);
+	if (nla_put_u8(msg, SP_GNL_ATTR_WLAN_FLOW, rule->inner.wlan_flow) ||
+		nla_put(msg, SP_GNL_ATTR_TRANSMITTER_MAC, ETH_ALEN, rule->inner.transmitter_mac) ||
+		nla_put(msg, SP_GNL_ATTR_RECEIVER_MAC, ETH_ALEN, rule->inner.receiver_mac) ||
+		nla_put(msg, SP_GNL_ATTR_RADIO_BAND, sizeof(radio.radio_band), radio.radio_band) ||
+		nla_put(msg, SP_GNL_ATTR_RADIO_CHANNEL, SP_RULE_MAX_VDEV_PER_ML, rule->inner.radio_channel) ||
+		nla_put(msg, SP_GNL_ATTR_RADIO_BANDWIDTH, sizeof(radio.radio_bandwidth), radio.radio_bandwidth) ||
+		nla_put_u8(msg, SP_GNL_ATTR_BAND_MODE, rule->inner.band_mode) ||
+		nla_put_u8(msg, SP_GNL_ATTR_CHANNEL_MODE, rule->inner.channel_mode) ||
+		nla_put_u8(msg, SP_GNL_ATTR_BANDWIDTH_MODE, rule->inner.bandwidth_mode) ||
+		nla_put(msg, SP_GNL_ATTR_BSSID, ETH_ALEN, rule->inner.bssid) ||
+		nla_put_u8(msg, SP_GNL_ATTR_SSID_LEN, rule->inner.ssid_len) ||
+		nla_put(msg, SP_GNL_ATTR_SSID, sizeof(rule->inner.ssid), ssid) ||
+		nla_put_u8(msg, SP_GNL_ATTR_ACCESS_CLASS, rule->inner.access_class) ||
+		nla_put_u8(msg, SP_GNL_ATTR_PRIORITY, rule->inner.priority)) {
+			return -1;
+		}
+
+	return 0;
 }
 
 /*
@@ -1896,25 +2636,30 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 
 	rcu_read_lock();
 	rule_id = nla_get_u32(info->attrs[SP_GNL_ATTR_ID]);
+	if (!rule_id) {
+		DEBUG_WARN("Rule ID does not exist for queried rule\n");
+		return -ENOMEM;
+	}
+
 	DEBUG_INFO("User requested rule with rule_id: 0x%x \n", rule_id);
 	rcu_read_unlock();
 
-	spin_lock(&sp_mapdb_lock);
+	spin_lock_bh(&sp_mapdb_lock);
 	if (!rule_manager.rule_count) {
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
 		DEBUG_WARN("Requested rule table is empty\n");
 		goto put_failure;
 	}
 
-	cur_hashentry = sp_mapdb_search_hashentry(rule_id, rule_id, SP_RULE_TYPE_SAWF);
+	cur_hashentry = sp_mapdb_search_hashentry(rule_id, rule_id, SP_RULE_TYPE_SAWF, NULL);
 	if (!cur_hashentry) {
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
 		DEBUG_WARN("Invalid rule with ruleID = %d, rule_type: %d\n", rule_id, SP_RULE_TYPE_SAWF);
 		goto put_failure;
 	}
 
 	rule = cur_hashentry->rule_node->rule;
-	spin_unlock(&sp_mapdb_lock);
+	spin_unlock_bh(&sp_mapdb_lock);
 
 	if (nla_put_u32(msg, SP_GNL_ATTR_ID, rule.id) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_RULE_PRECEDENCE, rule.rule_precedence) ||
@@ -1964,6 +2709,7 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP, rule.inner.vlan_pcp) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP_REMARK, rule.inner.vlan_pcp_remark) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id) ||
+	    nla_put_u16(msg, SP_GNL_ATTR_IPV4_FRAG_THRESH, rule.inner.ipv4_frag_thresh) ||
 	    nla_put_u8(msg, SP_GNL_ATTR_IP_VERSION_TYPE, rule.inner.ip_version_type) ||
 	    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_VALUE, rule.inner.match_pattern_value) ||
 	    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_MASK, rule.inner.match_pattern_mask) ||
@@ -1980,7 +2726,13 @@ static inline int sp_mapdb_rule_query(struct sk_buff *skb, struct genl_info *inf
 	    nla_put_u32(msg, SP_GNL_ATTR_BURST_SIZE_DL, rule.inner.burst_size_dl) ||
 	    nla_put_u32(msg, SP_GNL_ATTR_BURST_SIZE_UL, rule.inner.burst_size_ul) ||
 	    nla_put_u32(msg, SP_GNL_ATTR_SENSE_MESH_FLAG_IN, rule.inner.flags)) {
-		goto put_failure;
+			goto put_failure;
+		}
+
+	if (rule.inner.wlan_flow == 1) {
+		if (sp_mapdb_wlan_rule_query(msg, &rule)) {
+			goto put_failure;
+		}
 	}
 
 	genlmsg_end(msg, hdr);
@@ -2033,13 +2785,18 @@ static inline int sp_mapdb_rule_query_by_type(struct sk_buff *skb, struct genl_i
 		goto put_failure;
 	}
 
-	spin_lock(&sp_mapdb_lock);
+	if (type == SP_RULE_TYPE_SAWF_IFLI) {
+		DEBUG_WARN("Query by type is not supported for IFLI rules\n");
+		goto put_failure;
+	}
+
+	spin_lock_bh(&sp_mapdb_lock);
 	if (!rule_manager.rule_count) {
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
 		DEBUG_WARN("Requested rule table is empty\n");
 		goto put_failure;
 	}
-	spin_unlock(&sp_mapdb_lock);
+	spin_unlock_bh(&sp_mapdb_lock);
 
 	for (i = SP_MAPDB_RULE_MAX_PRECEDENCENUM - 1; i >= 0; i--) {
 		list_for_each_entry_rcu(curnode, &(rule_manager.prec_map[i].rule_list), rule_list) {
@@ -2089,6 +2846,7 @@ static inline int sp_mapdb_rule_query_by_type(struct sk_buff *skb, struct genl_i
 				    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP, rule.inner.vlan_pcp) ||
 				    nla_put_u8(msg, SP_GNL_ATTR_VLAN_PCP_REMARK, rule.inner.vlan_pcp_remark) ||
 				    nla_put_u8(msg, SP_GNL_ATTR_SERVICE_CLASS_ID, rule.inner.service_class_id) ||
+				    nla_put_u16(msg, SP_GNL_ATTR_IPV4_FRAG_THRESH, rule.inner.ipv4_frag_thresh) ||
 				    nla_put_u8(msg, SP_GNL_ATTR_IP_VERSION_TYPE, rule.inner.ip_version_type) ||
 				    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_VALUE, rule.inner.match_pattern_value) ||
 				    nla_put_u32(msg, SP_GNL_ATTR_MATCH_PATTERN_MASK, rule.inner.match_pattern_mask) ||
@@ -2145,9 +2903,9 @@ static inline int sp_mapdb_ruletable_flush_classifier_type(struct sk_buff *skb, 
 	rcu_read_unlock();
 
 	INIT_HLIST_HEAD(&tmp_head_hashentry);
-	spin_lock(&sp_mapdb_lock);
+	spin_lock_bh(&sp_mapdb_lock);
 	if (rule_manager.rule_count == 0) {
-		spin_unlock(&sp_mapdb_lock);
+		spin_unlock_bh(&sp_mapdb_lock);
 		DEBUG_WARN("The rule table is already empty. No action needed. \n");
 		return 0;
 	}
@@ -2177,7 +2935,7 @@ static inline int sp_mapdb_ruletable_flush_classifier_type(struct sk_buff *skb, 
 		}
 	}
 
-	spin_unlock(&sp_mapdb_lock);
+	spin_unlock_bh(&sp_mapdb_lock);
 
 	hlist_for_each_entry_safe(hashentry_iter, hlist_tmp, &tmp_head_hashentry, hlist) {
 		hash_del(&hashentry_iter->hlist);
@@ -2186,6 +2944,30 @@ static inline int sp_mapdb_ruletable_flush_classifier_type(struct sk_buff *skb, 
 
 	return 0;
 }
+
+/*
+ * sp_mapdb_rule_sync_socket_init
+ *	Initialized a global pointer with a socket value which will be used
+ *	to send sync messages via netlink
+ */
+static inline int sp_mapdb_rule_sync_socket_init(struct sk_buff *skb, struct genl_info *info)
+{
+	sync_msg_net = genl_info_net(info);
+	port_id = info->snd_portid;
+	return 0;
+}
+
+/*
+ * sp_mapdb_rule_sync_socket_exit
+ *	Reset global variables used for sync message
+ */
+static inline int sp_mapdb_rule_sync_socket_exit(struct sk_buff *skb, struct genl_info *info)
+{
+	sync_msg_net = NULL;
+	port_id = 0;
+	return 0;
+}
+
 /*
  * sp_genl_policy
  * 	Policy attributes
@@ -2235,6 +3017,23 @@ static struct nla_policy sp_genl_policy[SP_GNL_MAX + 1] = {
 	[SP_GNL_ATTR_BURST_SIZE_DL]		= { .type = NLA_U32, },
 	[SP_GNL_ATTR_BURST_SIZE_UL]		= { .type = NLA_U32, },
 	[SP_GNL_ATTR_SENSE_MESH_FLAG_IN]		= { .type = NLA_U32, },
+	[SP_GNL_ATTR_IPV4_FRAG_THRESH]          = { .type = NLA_U16, },
+	[SP_GNL_ATTR_WLAN_FLOW] 		=	{ .type = NLA_NESTED, },
+	[SP_GNL_ATTR_TRANSMITTER_MAC]	=	{ .len = ETH_ALEN, },
+	[SP_GNL_ATTR_RECEIVER_MAC]	=	{ .len = ETH_ALEN, },
+	[SP_GNL_ATTR_RADIO_BAND]	=	{ .type = NLA_NESTED_ARRAY, },
+	[SP_GNL_ATTR_RADIO_CHANNEL]	=	{ .type = NLA_NESTED_ARRAY, },
+	[SP_GNL_ATTR_RADIO_BANDWIDTH]	=	{ .type = NLA_NESTED_ARRAY, },
+	[SP_GNL_ATTR_BAND_MODE] 	=	{ .type = NLA_U8, },
+	[SP_GNL_ATTR_CHANNEL_MODE] 	=	{ .type = NLA_U8, },
+	[SP_GNL_ATTR_BANDWIDTH_MODE] 	=	{ .type = NLA_U8, },
+	[SP_GNL_ATTR_BSSID]	=	{ .len = ETH_ALEN },
+	[SP_GNL_ATTR_SSID_LEN]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_SSID]		= { .type = NLA_NUL_STRING, },
+	[SP_GNL_ATTR_ACCESS_CLASS]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_PRIORITY]		= { .type = NLA_U8, },
+	[SP_GNL_ATTR_RM_SYNC_MSG]		= { .len = sizeof(struct sp_rm_sync_msg) },
+	[SP_GNL_ATTR_DELETE_SYNC_MSG] = { .len = sizeof(struct sp_del_sync_msg) },
 };
 
 /* Spm generic netlink operations */
@@ -2263,6 +3062,18 @@ static const struct genl_ops sp_genl_ops[] = {
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 		.flags = GENL_ADMIN_PERM,
 	},
+	{
+		.cmd = SPM_CMD_SYNC_INIT,
+		.doit = sp_mapdb_rule_sync_socket_init,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+		.flags = GENL_ADMIN_PERM,
+	},
+	{
+		.cmd = SPM_CMD_SYNC_EXIT,
+		.doit = sp_mapdb_rule_sync_socket_exit,
+		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+		.flags = GENL_ADMIN_PERM,
+	},
 };
 
 /* Spm generic family */
@@ -2279,6 +3090,8 @@ static struct genl_family sp_genl_family = {
 	.module         = THIS_MODULE,
 	.ops            = sp_genl_ops,
 	.n_ops          = ARRAY_SIZE(sp_genl_ops),
+	.mcgrps         = sp_genl_mcgrps,
+	.n_mcgrps       = ARRAY_SIZE(sp_genl_mcgrps),
 };
 
 /*
@@ -2289,6 +3102,58 @@ void sp_mapdb_fini(void)
 {
 	sp_mapdb_ruletable_flush();
 }
+
+/*
+ * sp_mapdb_wifi_plugin_query_wlan_rule_cb_register()
+ * 	callback for plugin registration.
+ */
+int sp_mapdb_wifi_plugin_query_wlan_rule_cb_register(struct emesh_sp_wifi_sawf_callbacks *emesh_sp_wifi_cb)
+{
+	if (emesh_sp_wifi.sawf_rule_query_callback) {
+		DEBUG_ERROR("EMESH_SP_WIFI_PLUGIN_QUERY_WLAN_RULE_CALLBACK already registered!!");
+		return -1;
+	}
+
+	emesh_sp_wifi.sawf_rule_query_callback = emesh_sp_wifi_cb->sawf_rule_query_callback;
+	return 0;
+}
+EXPORT_SYMBOL(sp_mapdb_wifi_plugin_query_wlan_rule_cb_register);
+
+/*
+ * sp_mapdb_wifi_plugin_query_wlan_rule_cb_unregister()
+ * 	callback for plugin de-registration.
+ */
+void sp_mapdb_wifi_plugin_query_wlan_rule_cb_unregister(void)
+{
+	emesh_sp_wifi.sawf_rule_query_callback = NULL;
+}
+EXPORT_SYMBOL(sp_mapdb_wifi_plugin_query_wlan_rule_cb_unregister);
+
+/*
+ * sp_mapdb_wifi_plugin_validate_wlan_rule_cb_register()
+ * 	callback for plugin registration.
+ */
+int sp_mapdb_wifi_plugin_validate_wlan_rule_cb_register(struct emesh_sp_wifi_sawf_callbacks *emesh_sp_wifi_cb)
+{
+	if (emesh_sp_wifi.sawf_rule_validate_callback) {
+		DEBUG_ERROR("EMESH_SP_WIFI_PLUGIN_VALIDATE_WLAN_RULE_CALLBACK already registered!!");
+		return -1;
+	}
+
+	emesh_sp_wifi.sawf_rule_validate_callback = emesh_sp_wifi_cb->sawf_rule_validate_callback;
+	return 0;
+}
+EXPORT_SYMBOL(sp_mapdb_wifi_plugin_validate_wlan_rule_cb_register);
+
+/*
+ * sp_mapdb_wifi_plugin_validate_wlan_rule_cb_unregister()
+ * 	callback for plugin de-registration.
+ */
+void sp_mapdb_wifi_plugin_validate_wlan_rule_cb_unregister(void)
+{
+	emesh_sp_wifi.sawf_rule_validate_callback = NULL;
+}
+EXPORT_SYMBOL(sp_mapdb_wifi_plugin_validate_wlan_rule_cb_unregister);
 
 /*
  * sp_netlink_init()
